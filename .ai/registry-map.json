@@ -4684,12 +4684,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/scores.rs:1 The inspected modules persist evaluation evidence and versioned evaluation assets rather than an agent's remembered beliefs or learned procedures.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
-          "evaluatedRevision": 47,
-          "revisionsBehind": 4,
-          "stale": true
+          "evidence": "crates/store-pg/src/scores.rs:1 This context saves judge verdicts, benchmarks, datasets, rubrics, labels, calibrations and prompt versions as evaluation records, not as beliefs an agent recalls; the same search of crates/store-pg (recall/consolidat/episod/belief/distill) found 0 hits, and prompt versions are promoted by a quality gate, not distilled from observed episodes.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
+          "evaluatedRevision": 51,
+          "revisionsBehind": 4
         },
         {
           "subject": "eval-harness",
@@ -4844,12 +4843,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/events/mod.rs:1 This context stores and queries monitored LLM telemetry rather than implementing an agent's working, episodic, or consolidated memory.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
-          "evaluatedRevision": 47,
-          "revisionsBehind": 4,
-          "stale": true
+          "evidence": "crates/store-pg/src/events/mod.rs:1 Events, traces and rollups are monitored-app telemetry: transcript-like raw records that no stage here turns into recalled agent memory; the search of crates/store-pg for recall/consolidat/episod/belief/distill found 0 hits.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
+          "evaluatedRevision": 51,
+          "revisionsBehind": 4
         },
         {
           "subject": "llm-call-telemetry-model",
@@ -4994,12 +4992,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/projects.rs:1 The inspected platform modules persist administrative and operational records rather than information carried forward through an agent-memory pipeline.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
-          "evaluatedRevision": 47,
-          "revisionsBehind": 4,
-          "stale": true
+          "evidence": "crates/store-pg/src/projects.rs:1 These modules store admin and operational records (projects, keys, prices, jobs, relay leases, alerts) for the API; a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits, so nothing here carries an agent's working, episodic or consolidated state into a model's context.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
+          "evaluatedRevision": 51,
+          "revisionsBehind": 4
         },
         {
           "subject": "test-harness",
@@ -5819,8 +5816,12 @@
           "revision": 51,
           "changedAt": "2026-10-15",
           "confidence": "strong",
-          "state": "unknown",
-          "priorNotApplicable": 4
+          "state": "not-applicable",
+          "priorNotApplicable": 4,
+          "evidence": "crates/responder/src/ledger.rs:9 The responder starts each Claude investigation fresh. Its only persisted state is the alert ledger, which is read back only for admission counts (cooldown and hourly cap). The prompt context is telemetry fetched for each run (enrich.rs), so no earlier diagnosis is carried into a later run. A search of crates/responder for recall, consolidat, episod, belief and distill found 0 hits.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
+          "evaluatedRevision": 51
         },
         {
           "subject": "test-harness",
@@ -7624,12 +7625,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store/src/lib.rs:3 The inspected contract describes application persistence and backend capabilities without defining an agent-memory lifecycle.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
-          "evaluatedRevision": 47,
-          "revisionsBehind": 4,
-          "stale": true
+          "evidence": "crates/store/src/lib.rs:3 The trait and its DTOs define application persistence between the API and its backends, with no stages for capture, consolidation, decay or recall injection; a search of crates/store/src for recall, consolidat, episod, belief and distill found 0 hits. The many 'memory' hits are SQLite in-memory test databases, which is why that word is left out of the terms.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
+          "evaluatedRevision": 51,
+          "revisionsBehind": 4
         }
       ],
       "governance": "governed"
