@@ -2662,7 +2662,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/agent/src/run.rs:57 The agent leases up to max_batch (default 3) tasks but executes serially and renews only the running task, so queued tasks hold unrenewed leases that can expire and be reclaimed by another device. A short run that finishes before its first renewal tick sees no interrupt and delivers through its connector anyway, so the irreversible delivery can happen twice.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "module-design",
@@ -5103,7 +5107,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/jobs.rs:193 Job finish writes whatever status string the caller supplies, checking only finality and the fence, so the job registry has no closed status vocabulary or legal-transition door. The relay table beside it, by contrast, derives its next state from a typed outcome.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "quality-gates",
@@ -5852,12 +5860,11 @@
           "changedAt": "2026-10-15",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/responder/src/breaker.rs:121 Admission reserves project IDs rather than repository write scopes, allowing different projects mapped to the same checkout to run conflicting edit sessions.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:3eafb649495c9498",
-          "evaluatedRevision": 26,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/responder/src/breaker.rs:121 The in-flight reserve that gates a paid investigation and its ACT edit stage is keyed on the project id, not on the repository it writes to. Two projects mapped to the same checkout can therefore both pass admission (up to the semaphore cap) and run concurrent `git checkout -b` / acceptEdits sessions in one working tree, and the non-atomic `is_clean` check in act.rs does not serialize them.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28,
+          "revisionsBehind": 2
         },
         {
           "subject": "eval-harness",
@@ -6330,7 +6337,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/serve_job.rs:98 The worker sets the job's status field directly with free-form string literals, and the transition is not validated against a closed vocabulary (Job.status is a String; the API's finish writes it verbatim). A typo or an illegal target state lands in the registry instead of being rejected at one transition door.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "test-harness",

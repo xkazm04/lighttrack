@@ -1,0 +1,263 @@
+{
+ "schema": "conform-run/1",
+ "worker": "5f678e18-e7b6-40c8-9699-7a534e97e228",
+ "subject": "fleet-orchestration",
+ "evaluatedAt": "2026-10-24T03:50:31.805501+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "reactive-alert-responder",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/responder/src/breaker.rs:121 The in-flight reserve that gates a paid investigation and its ACT edit stage is keyed on the project id, not on the repository it writes to. Two projects mapped to the same checkout can therefore both pass admission (up to the semaphore cap) and run concurrent `git checkout -b` / acceptEdits sessions in one working tree, and the non-atomic `is_clean` check in act.rs does not serialize them.",
+   "techniques": [
+    {
+     "technique": "parallel-dispatch",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/breaker.rs:121 The slot cap exists (semaphore, breaker.rs:65), but the write scope is never declared or kept disjoint per repo. Collision domain = `entry.repo`, reservation key = project id."
+    },
+    {
+     "technique": "soft-budget-under-the-hard-cap",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/invoke.rs:41 Only hard caps exist (timeout + --max-budget-usd). Neither investigate nor fix prompt states a smaller budget derived from them, and the cap-fired fraction is not reported."
+    },
+    {
+     "technique": "brief-carries-the-session",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/act.rs:171 The fix brief restates its invariants (no git, no push, no test weakening) and carries the settled diagnosis inline instead of pointing at a standing file."
+    },
+    {
+     "technique": "completion-claim-verification",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/act.rs:95 'Applied' is read from the artifact (git diff), not from the worker's report. Tests run parent-side (act.rs:107), and a missing test_cmd is reported as 'no test run', never as passed."
+    },
+    {
+     "technique": "inherited-state-provenance",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/act.rs:51 Refuses to hand the edit worker a dirty, unexplained tree, and cuts a fresh lt-fix branch instead."
+    },
+    {
+     "technique": "result-harvest",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/invoke.rs:64 A failed or capped run is a first-class result (ok=false, with its text kept) and is posted to the alert ledger with its ok flag."
+    },
+    {
+     "technique": "absent-status-passthrough",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/ledger.rs:84 An unreported cost passes through as unknown and is never defaulted to 0."
+    }
+   ]
+  },
+  {
+   "context": "runner-worker-pipeline",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/serve_job.rs:98 The worker sets the job's status field directly with free-form string literals, and the transition is not validated against a closed vocabulary (Job.status is a String; the API's finish writes it verbatim). A typo or an illegal target state lands in the registry instead of being rejected at one transition door.",
+   "techniques": [
+    {
+     "technique": "session-registry",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/serve_job.rs:98 The status vocabulary is not single-sourced: JobKind got a closed enum, but job status did not. The writer pokes status ('queued'/'failed' too, in retry_decision) instead of reporting an observation."
+    },
+    {
+     "technique": "absent-status-passthrough",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/serve_api.rs:48 Ok(None) is documented as affirmative 409 'lease lost', yet it is also returned when no fence was observed at all. The heartbeat then logs LEASE LOST and cancels the run. Latent: both shipped backends stamp claimed_at at claim."
+    },
+    {
+     "technique": "lifecycle-signals",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_job.rs:57 Liveness comes from a timer heartbeat separate from progress. The stale reclaim is counted apart as worker deaths (stale_reclaims)."
+    },
+    {
+     "technique": "evidence-outranks-a-liveness-claim",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_job.rs:81 Renewable, fenced lease (the ladder the technique endorses). A transport error lands as unknown (Err), not as death."
+    },
+    {
+     "technique": "result-harvest",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_job.rs:105 A reported failure is a distinct account from a crash (failures vs attempts), and a cancel is not counted as a failure."
+    },
+    {
+     "technique": "outbound-compute-plane",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_api.rs:27 The worker polls the API for work and holds no store/DB dependency."
+    }
+   ]
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/jobs.rs:193 Job finish writes whatever status string the caller supplies, checking only finality and the fence, so the job registry has no closed status vocabulary or legal-transition door. The relay table beside it, by contrast, derives its next state from a typed outcome.",
+   "techniques": [
+    {
+     "technique": "session-registry",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/jobs.rs:193 Caller-supplied status is persisted unvalidated. Compare relay_lease::settle, which maps RelayOutcome to a state."
+    },
+    {
+     "technique": "parallel-dispatch",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/jobs.rs:70 Atomic single-statement claim, filtered by capability inside the sub-select."
+    },
+    {
+     "technique": "lifecycle-signals",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/jobs.rs:71 Sweep inference (worker death / device lost) is kept distinct from self-reported failure."
+    },
+    {
+     "technique": "evidence-outranks-a-liveness-claim",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/relay_lease.rs:17 Fenced, renewable lease, so a wrong takeover is refused rather than allowed to cause damage."
+    },
+    {
+     "technique": "absent-status-passthrough",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/devices.rs:99 An absent capability report leaves the stored value untouched (COALESCE)."
+    },
+    {
+     "technique": "result-harvest",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/relay_lease.rs:141 Terminal accounts stay distinct (succeeded / queued-retry / dead / cancelled / deferred)."
+    }
+   ]
+  },
+  {
+   "context": "device-relay-agent",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/agent/src/run.rs:57 The agent leases up to max_batch (default 3) tasks but executes serially and renews only the running task, so queued tasks hold unrenewed leases that can expire and be reclaimed by another device. A short run that finishes before its first renewal tick sees no interrupt and delivers through its connector anyway, so the irreversible delivery can happen twice.",
+   "techniques": [
+    {
+     "technique": "parallel-dispatch",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/run.rs:57 Admission (leases) exceeds execution capacity (1). The queue beyond the cap is a local list of held, unrenewed leases, not a pre-life entry at the door (config.rs:33 assumes the batch is harmless)."
+    },
+    {
+     "technique": "inherited-state-provenance",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/exec.rs:105 An edit/scan workspace is handed over after only an is_dir check. A retry after a device death inherits the previous attempt's edits with no provenance, state count or mandate, and render() exposes no attempt facts."
+    },
+    {
+     "technique": "outbound-compute-plane",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/cloud.rs:70 Outbound-only, key-authenticated long-poll. The device never touches the store."
+    },
+    {
+     "technique": "lifecycle-signals",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/run.rs:86 Timer heartbeat, with progress on its own door."
+    },
+    {
+     "technique": "evidence-outranks-a-liveness-claim",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/run.rs:138 Renewal is three-valued, and only affirmative reclaim/404 stops the run."
+    },
+    {
+     "technique": "durable-fleet-state",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/run.rs:5 Authoritative state lives in the cloud store, with no local mirror to reconcile."
+    },
+    {
+     "technique": "result-harvest",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/exec.rs:126 Deferred, failed and succeeded are distinct settled accounts. Rate-limit detection does rely on stderr substrings (exec.rs:200)."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "fleet-orchestration",
+   "context": "claude-invocation-and-execution",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T03:50:31.805501+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "absent-status-passthrough",
+    "brief-carries-the-session",
+    "completion-claim-verification",
+    "inherited-state-provenance",
+    "parallel-dispatch",
+    "result-harvest",
+    "soft-budget-under-the-hard-cap"
+   ],
+   "deviations": 1,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T03:50:31.805501+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "absent-status-passthrough",
+    "evidence-outranks-a-liveness-claim",
+    "lifecycle-signals",
+    "outbound-compute-plane",
+    "result-harvest",
+    "session-registry"
+   ],
+   "deviations": 1,
+   "context": "runner-worker-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T03:50:31.805501+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "absent-status-passthrough",
+    "evidence-outranks-a-liveness-claim",
+    "lifecycle-signals",
+    "parallel-dispatch",
+    "result-harvest",
+    "session-registry"
+   ],
+   "deviations": 1,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T03:50:31.805501+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "durable-fleet-state",
+    "evidence-outranks-a-liveness-claim",
+    "inherited-state-provenance",
+    "lifecycle-signals",
+    "outbound-compute-plane",
+    "parallel-dispatch",
+    "result-harvest"
+   ],
+   "deviations": 1,
+   "context": "device-relay-agent",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
