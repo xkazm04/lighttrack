@@ -1007,7 +1007,11 @@
           "revision": 6,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:1 These tests drive the axum router against in-process SQLite, and the 'capabilities' they cover are the store backend's declared surfaces, not extension privileges; a search of crates/api for plugin/safe_mode/wasm found zero hits, so no test here installs, isolates or dispatches third-party extension code.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a23407994bc4b9db",
+          "evaluatedRevision": 6
         },
         {
           "subject": "authorization",
@@ -1246,7 +1250,11 @@
           "revision": 6,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/main.rs:4 The API's domain modules are ingest, scoring, pricing, datasets, rubrics, benchmarks, jobs, projects and limits, with no extension install path, no plugin registry and no isolation runner; a search of crates/api for plugin/safe_mode/wasm found zero hits, and the request 'extensions' hits are axum request extensions, so the subject's precondition does not hold.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a23407994bc4b9db",
+          "evaluatedRevision": 6
         },
         {
           "subject": "quality-gates",
@@ -6493,7 +6501,11 @@
           "revision": 6,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/runner/src/cli.rs:48 The runner executes foreign code only through the opt-in exec-rubric sandbox, and that code is a scored candidate, not an installed extension with callbacks, grants or storage; a search of crates/runner for plugin/safe_mode/wasm/consent found zero hits, so no technique of extension hosting has a precondition here.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a23407994bc4b9db",
+          "evaluatedRevision": 6
         }
       ],
       "governance": "governed"

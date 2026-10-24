@@ -7495,6 +7495,36 @@
       "evaluatedTs": "2026-10-24T04:25:11.224Z",
       "worker": "67be874f-8393-45b0-aabd-94950b1528dc",
       "techniques": []
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/untrusted-extension-host": {
+      "context": "api-integration-tests",
+      "subject": "untrusted-extension-host",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:37:17.797Z",
+      "worker": "7c80bb1e-f211-4d30-892a-86b300cdca03",
+      "techniques": []
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/untrusted-extension-host": {
+      "context": "api-platform",
+      "subject": "untrusted-extension-host",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:37:17.797Z",
+      "worker": "7c80bb1e-f211-4d30-892a-86b300cdca03",
+      "techniques": []
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/untrusted-extension-host": {
+      "context": "runner-worker-pipeline",
+      "subject": "untrusted-extension-host",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:37:17.797Z",
+      "worker": "7c80bb1e-f211-4d30-892a-86b300cdca03",
+      "techniques": []
     }
   }
 }

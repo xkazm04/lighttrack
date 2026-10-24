@@ -1,0 +1,92 @@
+{
+ "schema": "conform-run/1",
+ "worker": "7c80bb1e-f211-4d30-892a-86b300cdca03",
+ "subject": "untrusted-extension-host",
+ "evaluatedAt": "2026-10-24T04:37:17.797567+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-integration-tests",
+   "subject": "untrusted-extension-host",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/src/tests_capabilities.rs:1 These tests drive the axum router against in-process SQLite, and the 'capabilities' they cover are the store backend's declared surfaces, not extension privileges; a search of crates/api for plugin/safe_mode/wasm found zero hits, so no test here installs, isolates or dispatches third-party extension code.",
+   "techniques": [],
+   "absenceTerms": [
+    "plugin",
+    "wasm"
+   ]
+  },
+  {
+   "context": "api-platform",
+   "subject": "untrusted-extension-host",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/src/main.rs:4 The API's domain modules are ingest, scoring, pricing, datasets, rubrics, benchmarks, jobs, projects and limits, with no extension install path, no plugin registry and no isolation runner; a search of crates/api for plugin/safe_mode/wasm found zero hits, and the request 'extensions' hits are axum request extensions, so the subject's precondition does not hold.",
+   "techniques": [],
+   "absenceTerms": [
+    "plugin",
+    "wasm"
+   ]
+  },
+  {
+   "context": "runner-worker-pipeline",
+   "subject": "untrusted-extension-host",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/runner/src/cli.rs:48 The runner executes foreign code only through the opt-in exec-rubric sandbox, and that code is a scored candidate, not an installed extension with callbacks, grants or storage; a search of crates/runner for plugin/safe_mode/wasm/consent found zero hits, so no technique of extension hosting has a precondition here.",
+   "techniques": [],
+   "absenceTerms": [
+    "plugin",
+    "wasm",
+    "consent"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "untrusted-extension-host",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/posture.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T04:37:17.797567+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "untrusted-extension-host"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "api-integration-tests",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:37:17.797567+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "untrusted-extension-host"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "api-platform",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:37:17.797567+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "untrusted-extension-host"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "runner-worker-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
