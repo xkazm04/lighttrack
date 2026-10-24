@@ -6329,73 +6329,74 @@
       "context": "api-integration-tests",
       "subject": "test-input-generation",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-16",
-      "evaluatedTs": "2026-10-16T21:33:14.791Z",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T21:27:16.232Z",
+      "worker": "9c1b80ed-c01f-487b-ae69-804e54920563",
       "techniques": [
         {
           "technique": "exhaustive-when-bounded",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/tests_persistence_class.rs:190 The test iterates over all variants of the bounded Redaction enum to assert invariants across the entire configuration space without sampling, though no bound calculation is recorded."
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:1350 The label is a structural dimension with only 15 values and the clamp acts per entry, so the technique says enumerate it and sample only the continuous fields (quality, n_cases). No bound is written down, and coverage of each label is left to chance over 100 draws."
         },
         {
-          "technique": "field-captured-operation-traces",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_traces.rs:1 The trace tests in the suite exercise the HTTP ingestion endpoint for OpenTelemetry traces rather than replaying field-captured user operation traces through the generator vocabulary."
+          "technique": "seed-is-not-a-reproduction",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:1367 The doc comment says the fixed LCG seed makes a failure reproducible, but the failure message gives only the body index and the clamped stored value, never the generated body. Editing the label list re-points every draw."
         },
         {
           "technique": "generator-bounds-the-space",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_ingest.rs:147 The integration test suite uses hand-crafted JSON payloads rather than randomized generators, so generator reachability constraints and bounds do not apply."
-        },
-        {
-          "technique": "inside-out-invariants",
           "verdict": "deviation",
-          "evidence": "crates/api/src/tests_ingest.rs:35 Setup exports the raw SqliteStore handle alongside AppState so integration tests inspect tables directly from the outside, bypassing inside-out invariant checking entry points."
-        },
-        {
-          "technique": "liveness-needs-a-quiet-period",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_health.rs:1 The suite runs deterministic single-shot requests without continuous fault injection or chaos phases requiring a quiet period."
-        },
-        {
-          "technique": "model-based-oracle",
-          "verdict": "deviation",
-          "evidence": "crates/api/src/tests_ingest.rs:636 The test checks only a single hard-coded error code rather than an oracle predicting the set of violated rules for accept-or-reject decisions."
+          "evidence": "crates/api/src/tests_collective.rs:1318 The generator draws only from a closed list and the model is always haiku or sonnet. It can never emit a non-string, missing or unlisted task_type. The comment lists what it covers but never what it cannot produce. Medium confidence."
         },
         {
           "technique": "negative-space-generation",
           "verdict": "conformant",
-          "evidence": "crates/api/src/tests_ingest.rs:628 Invalid events are constructed by perturbing a valid event across the timestamp tolerance boundary, asserting the specific rejection code while verifying persistence was untouched."
+          "evidence": "crates/api/src/tests_difficulty_write.rs:172 Rejection inputs are near-valid ('hardd', 'expert', ' ', wrong JSON type). The test checks the specific refusal (assert_names_the_ladder), checks state after rejection (line 195: no case left behind), and keeps a positive control (the accepted list)."
+        },
+        {
+          "technique": "field-captured-operation-traces",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_traces.rs:1 The trace tests in the suite exercise the HTTP ingestion endpoint for OpenTelemetry traces rather than replaying field-captured user operation traces through the generator vocabulary.",
+          "carriedFrom": "2026-10-16"
+        },
+        {
+          "technique": "inside-out-invariants",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:35 Setup exports the raw SqliteStore handle alongside AppState so integration tests inspect tables directly from the outside, bypassing inside-out invariant checking entry points.",
+          "carriedFrom": "2026-10-16"
+        },
+        {
+          "technique": "liveness-needs-a-quiet-period",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_health.rs:1 The suite runs deterministic single-shot requests without continuous fault injection or chaos phases requiring a quiet period.",
+          "carriedFrom": "2026-10-16"
+        },
+        {
+          "technique": "model-based-oracle",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:636 The test checks only a single hard-coded error code rather than an oracle predicting the set of violated rules for accept-or-reject decisions.",
+          "carriedFrom": "2026-10-16"
         },
         {
           "technique": "proof-cost-follows-the-circuit",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_capabilities.rs:1 The repository does not employ symbolic execution or SMT solver-backed proof engines in its toolchain."
-        },
-        {
-          "technique": "seed-is-not-a-reproduction",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_dev_mode.rs:1 Tests are deterministic and hand-written without pseudorandom seeds, so seed-versus-derived-input persistence does not apply."
+          "evidence": "crates/api/src/tests_capabilities.rs:1 The repository does not employ symbolic execution or SMT solver-backed proof engines in its toolchain.",
+          "carriedFrom": "2026-10-16"
         },
         {
           "technique": "stage-ordered-fuzz-targets",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_ingest.rs:4 The multi-stage ingress pipeline is tested only end-to-end via router oneshot requests without stage-ordered fuzz targets draining shallow stages first."
+          "evidence": "crates/api/src/tests_ingest.rs:4 The multi-stage ingress pipeline is tested only end-to-end via router oneshot requests without stage-ordered fuzz targets draining shallow stages first.",
+          "carriedFrom": "2026-10-16"
         },
         {
           "technique": "swarm-feature-sampling",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_auth_throttle.rs:1 The suite does not generate randomized operation sequences, so feature-probability sampling and feature-omission distributions do not apply."
+          "evidence": "crates/api/src/tests_auth_throttle.rs:1 The suite does not generate randomized operation sequences, so feature-probability sampling and feature-omission distributions do not apply.",
+          "carriedFrom": "2026-10-16"
         }
-      ],
-      "registryProposal": "The test-input-generation standard assumes test suites are either property/fuzz generators or hand-written unit tests; when applied to integration test suites for stateful systems, inside-out invariants and negative-space generation apply directly to integration harnesses, whereas randomized techniques (generator bounds, swarm feature sampling, seed reproduction) require explicit preconditions distinguishing property-based harnesses from API integration suites.",
-      "withdrawn": {
-        "worker": "1778f204-1355-4dac-be9c-3cc9d731f0c2",
-        "state": "deviation",
-        "at": "2026-10-16T21:33:29.030244+00:00",
-        "reason": "reviewer (sonnet): tests_ingest.rs:35 only shows setup() returning the SqliteStore handle next to AppState so a test can read persisted rows after a request, and requests still go through the real axum router (`ingest` in tests_ingest.rs). Nothing in it shows invariant-checking entry points being bypassed. The support"
-      }
+      ]
     },
     "ae7d2e99-8b0f-49f5-83c9-138d65df5241/admission-queue": {
       "context": "event-ingest",
@@ -7613,6 +7614,47 @@
         "at": "2026-10-24T05:30:14.311774+00:00",
         "reason": "reviewer (sonnet): The line 23 comment only says maintenance_pass has no pruning parameter, but the Store trait does have an age-floor prune, purge_collective_entries_before (lib.rs:1822, sqlite/collective.rs:71). The retention policy is also a dated operator decision (sqlite/maintenance.rs:54-60), so 'the absence of "
       }
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/test-input-generation": {
+      "context": "provider-generation",
+      "subject": "test-input-generation",
+      "bundle": "software-engineering",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T21:27:16.232Z",
+      "worker": "9c1b80ed-c01f-487b-ae69-804e54920563",
+      "techniques": [
+        {
+          "technique": "exhaustive-when-bounded",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/anthropic_api.rs:323 The 5-level effort space is enumerated, not sampled. Gemini (gemini.rs:259) and OpenRouter do the same, so the suite can claim it covers every level."
+        },
+        {
+          "technique": "negative-space-generation",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/providers.rs:517 Hand-written invalid inputs sit just past the boundary (a negative number, an HTTP-date, a missing header) next to positive controls in the same test. They are hand-written, not generated."
+        },
+        {
+          "technique": "generator-bounds-the-space",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:474 Fixtures are built from literal pairs. A repo-wide search for proptest/quickcheck/fuzz/rand found no input generator whose reach could be bounded."
+        },
+        {
+          "technique": "seed-is-not-a-reproduction",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/tests/provider_boundary.rs:133 Every case keeps the concrete input inline. There is no seed anywhere to go stale."
+        },
+        {
+          "technique": "liveness-needs-a-quiet-period",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/retry.rs:155 Recovery is tested with a scripted, deterministic fault sequence, not a continuously fault-injecting run, so a quiet period has nothing to apply to."
+        },
+        {
+          "technique": "model-based-oracle",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/tests/provider_boundary.rs:163 Inputs are not generated, so no model is needed. Each case states its expected typed reason and fields, which is the reason-not-verdict comparison the technique asks for."
+        }
+      ]
     }
   }
 }

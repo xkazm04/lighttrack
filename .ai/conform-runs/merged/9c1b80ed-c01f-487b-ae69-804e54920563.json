@@ -1,0 +1,117 @@
+{
+ "schema": "conform-run/1",
+ "worker": "9c1b80ed-c01f-487b-ae69-804e54920563",
+ "subject": "test-input-generation",
+ "evaluatedAt": "2026-10-24T21:27:16.232318+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "provider-generation",
+   "subject": "test-input-generation",
+   "bundle": "software-engineering",
+   "state": "conformant",
+   "evidence": "crates/engine/src/anthropic_api.rs:323 The adapter tests have no randomized generator; they enumerate the small effort space exhaustively (Effort::ALL, so new levels are covered without anyone remembering to add them) and write near-boundary negative cases by hand, so the techniques that do apply here are met and the generator-centred ones have no precondition.",
+   "techniques": [
+    {
+     "technique": "exhaustive-when-bounded",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/anthropic_api.rs:323 The 5-level effort space is enumerated, not sampled. Gemini (gemini.rs:259) and OpenRouter do the same, so the suite can claim it covers every level."
+    },
+    {
+     "technique": "negative-space-generation",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/providers.rs:517 Hand-written invalid inputs sit just past the boundary (a negative number, an HTTP-date, a missing header) next to positive controls in the same test. They are hand-written, not generated."
+    },
+    {
+     "technique": "generator-bounds-the-space",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/providers.rs:474 Fixtures are built from literal pairs. A repo-wide search for proptest/quickcheck/fuzz/rand found no input generator whose reach could be bounded."
+    },
+    {
+     "technique": "seed-is-not-a-reproduction",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/tests/provider_boundary.rs:133 Every case keeps the concrete input inline. There is no seed anywhere to go stale."
+    },
+    {
+     "technique": "liveness-needs-a-quiet-period",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/retry.rs:155 Recovery is tested with a scripted, deterministic fault sequence, not a continuously fault-injecting run, so a quiet period has nothing to apply to."
+    },
+    {
+     "technique": "model-based-oracle",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/tests/provider_boundary.rs:163 Inputs are not generated, so no model is needed. Each case states its expected typed reason and fields, which is the reason-not-verdict comparison the technique asks for."
+    }
+   ]
+  },
+  {
+   "context": "api-integration-tests",
+   "subject": "test-input-generation",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/tests_collective.rs:1350 The suite's only generated test picks task_type labels from a fixed 15-label list using an LCG instead of enumerating them, so it cannot claim every label was exercised; on failure it reports the body index rather than the generated input.",
+   "techniques": [
+    {
+     "technique": "exhaustive-when-bounded",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_collective.rs:1350 The label is a structural dimension with only 15 values and the clamp acts per entry, so the technique says enumerate it and sample only the continuous fields (quality, n_cases). No bound is written down, and coverage of each label is left to chance over 100 draws."
+    },
+    {
+     "technique": "seed-is-not-a-reproduction",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_collective.rs:1367 The doc comment says the fixed LCG seed makes a failure reproducible, but the failure message gives only the body index and the clamped stored value, never the generated body. Editing the label list re-points every draw."
+    },
+    {
+     "technique": "generator-bounds-the-space",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_collective.rs:1318 The generator draws only from a closed list and the model is always haiku or sonnet. It can never emit a non-string, missing or unlisted task_type. The comment lists what it covers but never what it cannot produce. Medium confidence."
+    },
+    {
+     "technique": "negative-space-generation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_difficulty_write.rs:172 Rejection inputs are near-valid ('hardd', 'expert', ' ', wrong JSON type). The test checks the specific refusal (assert_names_the_ladder), checks state after rejection (line 195: no case left behind), and keeps a positive control (the accepted list)."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T21:27:16.232318+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-input-generation"
+   ],
+   "techniques": [
+    "exhaustive-when-bounded",
+    "generator-bounds-the-space",
+    "liveness-needs-a-quiet-period",
+    "model-based-oracle",
+    "negative-space-generation",
+    "seed-is-not-a-reproduction"
+   ],
+   "deviations": 0,
+   "context": "provider-generation",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T21:27:16.232318+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-input-generation"
+   ],
+   "techniques": [
+    "exhaustive-when-bounded",
+    "generator-bounds-the-space",
+    "negative-space-generation",
+    "seed-is-not-a-reproduction"
+   ],
+   "deviations": 1,
+   "context": "api-integration-tests",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

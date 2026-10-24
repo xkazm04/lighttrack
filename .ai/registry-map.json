@@ -1068,7 +1068,11 @@
           "revision": 10,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:1350 The suite's only generated test picks task_type labels from a fixed 15-label list using an LCG instead of enumerating them, so it cannot claim every label was exercised; on failure it reports the body index rather than the generated input.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:d5ab12a92aba67c4",
+          "evaluatedRevision": 10
         },
         {
           "subject": "quality-gates",
@@ -5560,7 +5564,11 @@
           "revision": 10,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/engine/src/anthropic_api.rs:323 The adapter tests have no randomized generator; they enumerate the small effort space exhaustively (Effort::ALL, so new levels are covered without anyone remembering to add them) and write near-boundary negative cases by hand, so the techniques that do apply here are met and the generator-centred ones have no precondition.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:d5ab12a92aba67c4",
+          "evaluatedRevision": 10
         },
         {
           "subject": "mcp-tools",
