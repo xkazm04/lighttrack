@@ -7273,7 +7273,11 @@
           "revision": 9,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 This context's 'claim' is a database job-queue claim handed to a runner worker, not a VCS session's claim on a shared checkout; a search of crates/api/src for worktree, GIT_INDEX_FILE, `git stash` and `git commit` found nothing, so none of the subject's precondition (several sessions staging and committing in one checkout) holds in these files.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:de557423d4cf3016",
+          "evaluatedRevision": 9
         }
       ],
       "governance": "governed"

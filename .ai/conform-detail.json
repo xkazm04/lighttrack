@@ -7847,6 +7847,62 @@
         }
       ],
       "registryProposal": "precision-trades-have-a-direction assumes that false positives are visible (users report them) and false negatives are not. A transform-shaped detector such as a redactor reverses this: a false positive silently rewrites stored evidence that a downstream judge reads, while a missed match stays visible in the row. The technique could note that which error direction is visible depends on whether the detector's output is a report or an in-place rewrite."
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/concurrent-vcs": {
+      "context": "storage-and-jobs",
+      "subject": "concurrent-vcs",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T22:16:53.598Z",
+      "worker": "465bc850-f5e2-4daf-8fe8-b486426de887",
+      "techniques": [
+        {
+          "technique": "commit-time-claim-guard",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 No pre-commit hook or commit path in this context; the claim is a job row lease."
+        },
+        {
+          "technique": "commit-verification",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 The context never runs git commit or push, so there is nothing to read back."
+        },
+        {
+          "technique": "isolated-index-commits",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 It never touches a staging index; GIT_INDEX_FILE is absent from crates/api/src."
+        },
+        {
+          "technique": "never-lose-work-rules",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 It never runs stash, add or reset."
+        },
+        {
+          "technique": "physical-isolation",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 It creates no worktree; this is runtime service code."
+        },
+        {
+          "technique": "integration-door",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 It does no branch merge-back."
+        },
+        {
+          "technique": "intent-ledgers",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 It keeps no session ledger of editing scopes; the job table is a work queue, not a ledger of who is editing the tree."
+        },
+        {
+          "technique": "shared-resource-arbitration",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:93 Lease and staleness ideas show up here for job workers, which is analogous but outside VCS scope. They are not judged as conformance."
+        },
+        {
+          "technique": "sub-file-claim-scope",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:192 It has a heartbeat-renewed lease, but on job rows, not on file or function claims."
+        }
+      ]
     }
   }
 }

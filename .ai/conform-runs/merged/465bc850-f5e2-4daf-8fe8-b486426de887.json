@@ -1,0 +1,95 @@
+{
+ "schema": "conform-run/1",
+ "worker": "465bc850-f5e2-4daf-8fe8-b486426de887",
+ "subject": "concurrent-vcs",
+ "evaluatedAt": "2026-10-25T22:16:53.598189+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "storage-and-jobs",
+   "subject": "concurrent-vcs",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/src/jobs.rs:121 This context's 'claim' is a database job-queue claim handed to a runner worker, not a VCS session's claim on a shared checkout; a search of crates/api/src for worktree, GIT_INDEX_FILE, `git stash` and `git commit` found nothing, so none of the subject's precondition (several sessions staging and committing in one checkout) holds in these files.",
+   "techniques": [
+    {
+     "technique": "commit-time-claim-guard",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 No pre-commit hook or commit path in this context; the claim is a job row lease."
+    },
+    {
+     "technique": "commit-verification",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 The context never runs git commit or push, so there is nothing to read back."
+    },
+    {
+     "technique": "isolated-index-commits",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 It never touches a staging index; GIT_INDEX_FILE is absent from crates/api/src."
+    },
+    {
+     "technique": "never-lose-work-rules",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 It never runs stash, add or reset."
+    },
+    {
+     "technique": "physical-isolation",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 It creates no worktree; this is runtime service code."
+    },
+    {
+     "technique": "integration-door",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 It does no branch merge-back."
+    },
+    {
+     "technique": "intent-ledgers",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:121 It keeps no session ledger of editing scopes; the job table is a work queue, not a ledger of who is editing the tree."
+    },
+    {
+     "technique": "shared-resource-arbitration",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:93 Lease and staleness ideas show up here for job workers, which is analogous but outside VCS scope. They are not judged as conformance."
+    },
+    {
+     "technique": "sub-file-claim-scope",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:192 It has a heartbeat-renewed lease, but on job rows, not on file or function claims."
+    }
+   ],
+   "absenceTerms": [
+    "worktree",
+    "GIT_INDEX_FILE",
+    "git stash",
+    "git commit"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T22:16:53.598189+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "concurrent-vcs"
+   ],
+   "techniques": [
+    "commit-time-claim-guard",
+    "commit-verification",
+    "integration-door",
+    "intent-ledgers",
+    "isolated-index-commits",
+    "never-lose-work-rules",
+    "physical-isolation",
+    "shared-resource-arbitration",
+    "sub-file-claim-scope"
+   ],
+   "deviations": 0,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
