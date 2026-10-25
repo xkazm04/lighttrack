@@ -2200,7 +2200,11 @@
           "revision": 15,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/core/src/lib.rs:1 This context is only pure, I/O-free wire and record types (LlmEvent, Trace/Span, rollups, relay status vocabularies), and nothing in it parses model text into an artifact; searching crates/core case-insensitively for extract_json, strip_fence, repair_, max_tokens and finish_reason found 0 hits, and the extraction pipeline is in crates/engine (parse.rs, fence.rs, judge/), so this subject applies there, not here.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:d51aec71411ccb2b",
+          "evaluatedRevision": 15
         }
       ],
       "governance": "governed"

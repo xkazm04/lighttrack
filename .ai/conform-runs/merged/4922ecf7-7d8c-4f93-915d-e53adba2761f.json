@@ -1,0 +1,40 @@
+{
+ "schema": "conform-run/1",
+ "worker": "4922ecf7-7d8c-4f93-915d-e53adba2761f",
+ "subject": "structured-output",
+ "evaluatedAt": "2026-10-25T23:56:54.060127+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "core-observability-types",
+   "subject": "structured-output",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/core/src/lib.rs:1 This context is only pure, I/O-free wire and record types (LlmEvent, Trace/Span, rollups, relay status vocabularies), and nothing in it parses model text into an artifact; searching crates/core case-insensitively for extract_json, strip_fence, repair_, max_tokens and finish_reason found 0 hits, and the extraction pipeline is in crates/engine (parse.rs, fence.rs, judge/), so this subject applies there, not here.",
+   "techniques": [],
+   "absenceTerms": [
+    "extract_json",
+    "strip_fence",
+    "repair_",
+    "max_tokens",
+    "finish_reason"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T23:56:54.060127+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "structured-output"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "core-observability-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
