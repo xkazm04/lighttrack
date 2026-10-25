@@ -1,0 +1,52 @@
+{
+ "schema": "conform-run/1",
+ "worker": "421d5992-b3ed-4ea0-b1cb-5b187424b224",
+ "subject": "production-trace-scoring",
+ "evaluatedAt": "2026-10-25T23:29:14.730609+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "judge-and-scoring",
+   "subject": "production-trace-scoring",
+   "bundle": "llm-observability",
+   "state": "not-applicable",
+   "evidence": "crates/engine/src/judge.rs:187 The engine's judge scores one (input, expected, output) case it is handed and has no trace identity, settle cutoff, sample gate or scored-queue; a search of crates/engine for sample_every, errors_always, settle_secs, unscored_for and coverage_receipt found nothing, because the live-traffic loop the subject governs lives in crates/runner/src/score_traces.rs, outside this context.",
+   "techniques": [
+    {
+     "technique": "settle-window-completion",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/judge.rs:187 The engine is called with already-chosen text; deciding when a trace is finished happens in the runner's score_traces cycle, not here."
+    },
+    {
+     "technique": "stable-hash-sampling",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/judge.rs:187 No trace id reaches the judge entry point, so it makes no sample-membership decision; the runner does that."
+    }
+   ],
+   "absenceTerms": [
+    "sample_every",
+    "settle_secs",
+    "unscored_for"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T23:29:14.730609+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "production-trace-scoring"
+   ],
+   "techniques": [
+    "settle-window-completion",
+    "stable-hash-sampling"
+   ],
+   "deviations": 0,
+   "context": "judge-and-scoring",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -5001,32 +5001,34 @@
       "context": "judge-and-scoring",
       "subject": "production-trace-scoring",
       "bundle": "llm-observability",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-15",
-      "evaluatedTs": "2026-10-15T04:29:43.708Z",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:29:14.730Z",
+      "worker": "421d5992-b3ed-4ea0-b1cb-5b187424b224",
       "techniques": [
+        {
+          "technique": "settle-window-completion",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:187 The engine is called with already-chosen text; deciding when a trace is finished happens in the runner's score_traces cycle, not here."
+        },
         {
           "technique": "stable-hash-sampling",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/judge/batch.rs:96 The batch judge returns one outcome for every case it was given. It does not choose members of an unbounded trace stream."
+          "evidence": "crates/engine/src/judge.rs:187 No trace id reaches the judge entry point, so it makes no sample-membership decision; the runner does that."
         },
         {
           "technique": "verdict-coverage-receipt",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/lib.rs:323 The product is a case result returned to the caller, not a stored whole-trace verdict over an aggregate that can still grow."
+          "evidence": "crates/engine/src/lib.rs:323 The product is a case result returned to the caller, not a stored whole-trace verdict over an aggregate that can still grow.",
+          "carriedFrom": "2026-10-15"
         },
         {
           "technique": "error-analysis-first-taxonomy",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/prompts.rs:5 Prompt builders render an operator-authored rubric. They do not open-code live traces into dimensions."
+          "evidence": "crates/engine/src/prompts.rs:5 Prompt builders render an operator-authored rubric. They do not open-code live traces into dimensions.",
+          "carriedFrom": "2026-10-15"
         }
-      ],
-      "withdrawn": {
-        "worker": "1ce61358-5216-4459-a0df-35772633150f",
-        "state": "not-applicable",
-        "at": "2026-10-15T04:30:09.577328+00:00",
-        "reason": "reviewer (sonnet): The not-applicable rests on incidental anchors and wrong search terms: sample_every/settle_secs/TraceCoverage/fnv1a are runner-side selection terms, while this engine context contains the judge prompt builder that production trace scoring calls (prompts.rs:57 names it; prompts/grounding.rs uses FNV-"
-      }
+      ]
     },
     "3df8f303-0005-4d18-8f39-d97cfc5fd20c/telemetry-pii-redaction": {
       "context": "pii-scrubbing",

@@ -4213,7 +4213,11 @@
           "revision": 7,
           "changedAt": "2026-09-01",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:187 The engine's judge scores one (input, expected, output) case it is handed and has no trace identity, settle cutoff, sample gate or scored-queue; a search of crates/engine for sample_every, errors_always, settle_secs, unscored_for and coverage_receipt found nothing, because the live-traffic loop the subject governs lives in crates/runner/src/score_traces.rs, outside this context.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:95adbc351991715b",
+          "evaluatedRevision": 8
         },
         {
           "subject": "voice-io",
