@@ -5177,7 +5177,11 @@
           "revision": 5,
           "changedAt": "2026-09-01",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/revenue.rs:74 The revenue prefilter only lets a row in by its timestamp when a period field is NULL. A row whose period is broken (period_end <= period_start) gets in only if that period overlaps the window. But core `recognized_amount` (crates/core/src/margin.rs:149-166) treats such a row as point-in-time at `ts`. So a Stripe one-off invoice whose line period is degenerate and earlier than `created` is recognized in no window at all. The billing webhook path (crates/api/src/billing.rs:119) does not run the `pe <= ps` validation that manual ingest does.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:c18d4210fdd38f70",
+          "evaluatedRevision": 6
         },
         {
           "subject": "mcp-tools",

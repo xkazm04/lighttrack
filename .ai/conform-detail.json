@@ -7981,6 +7981,28 @@
         }
       ],
       "registryProposal": "no-retroactive-repricing says an imputed charge is 'never written onto the event'. This repo instead writes a labelled forward-fill (cost_source=book_fill, priced_at) onto previously NULL events, using the current book rather than the rate in force at event time. The technique should say whether a provenance-labelled one-time fill of unpriced rows is allowed, or whether it must stay a projection beside the ledger."
+    },
+    "ae45e444-9735-4d0d-a66c-a946ba4d5e88/margin-and-unit-economics": {
+      "context": "pg-platform-operations",
+      "subject": "margin-and-unit-economics",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:07:54.478Z",
+      "worker": "4327abde-6094-431b-941c-3a6dec1b7ae3",
+      "techniques": [
+        {
+          "technique": "revenue-recognition-rules",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/revenue.rs:74 The half-open windows and the overlap arm for valid periods are right. Refusing to restate money on webhook redelivery (line 18, RESTATE_MONEY) is also right. The gap is the technique's rule 'period fields but start ≥ end → treat as point-in-time': the SQL prefilter disagrees with the shared recognition function, so a second recognition rule lives in storage and drops rows the function would count."
+        },
+        {
+          "technique": "cogs-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/revenue.rs:134 Cost is summed from `events` only. Judge and benchmark spend is written to `scores.cost_usd`, and the runner only GETs /v1/events. The count of rows it could not price is reported rather than zero-filled, and grouping on `metadata->>key` leaves a NULL-key row, which core maps to the unattributed bucket."
+        }
+      ],
+      "registryProposal": "revenue-recognition-rules says 'one implementation, many surfaces' but only talks about surfaces. It should also cover storage: a SQL window prefilter that picks candidate revenue rows is a second recognition rule. It must apply the same degenerate-period fallback (start ≥ end → admit by ts), or the pure function never sees rows it would have counted."
     }
   }
 }
