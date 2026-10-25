@@ -1,0 +1,40 @@
+{
+ "schema": "conform-run/1",
+ "worker": "2a7eed1a-eb86-4609-8a5d-d2c5de35d74c",
+ "subject": "retrieval",
+ "evaluatedAt": "2026-10-25T23:49:30.077671+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "pg-evaluation-store",
+   "subject": "retrieval",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/dataset_lineage.rs:262 This context only does exact-predicate CRUD and filtered, sampled selection: rows ordered by RANDOM() or recency for dataset mining, scores by created_at. A query is never matched against a corpus by lexical or semantic relevance to give a consumer a ranked slice, and a grep of crates/store-pg for embedding/cosine/rerank/retriev/tsvector/nearest found 0 hits, so none of the retrieval techniques' preconditions hold.",
+   "techniques": [],
+   "absenceTerms": [
+    "embedding",
+    "cosine",
+    "rerank",
+    "retriev",
+    "tsvector"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T23:49:30.077671+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "retrieval"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

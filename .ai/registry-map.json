@@ -4831,7 +4831,11 @@
           "revision": 19,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/dataset_lineage.rs:262 This context only does exact-predicate CRUD and filtered, sampled selection: rows ordered by RANDOM() or recency for dataset mining, scores by created_at. A query is never matched against a corpus by lexical or semantic relevance to give a consumer a ranked slice, and a grep of crates/store-pg for embedding/cosine/rerank/retriev/tsvector/nearest found 0 hits, so none of the retrieval techniques' preconditions hold.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:a49d27f889212d3f",
+          "evaluatedRevision": 19
         },
         {
           "subject": "scoring-rubrics",

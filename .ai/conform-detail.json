@@ -8114,6 +8114,16 @@
           "evidence": "crates/api/src/tests_prompt_gate.rs:169 Runs with status cancelled, partial(budget) or aborted and a 0.95 mean are blocked. The reason says 'incomplete' and names the cause, not 'regressed', and only force overrides it."
         }
       ]
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/retrieval": {
+      "context": "pg-evaluation-store",
+      "subject": "retrieval",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:49:30.077Z",
+      "worker": "2a7eed1a-eb86-4609-8a5d-d2c5de35d74c",
+      "techniques": []
     }
   }
 }
