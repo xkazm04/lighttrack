@@ -7903,6 +7903,47 @@
           "evidence": "crates/api/src/jobs.rs:192 It has a heartbeat-renewed lease, but on job rows, not on file or function claims."
         }
       ]
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/engine-host-contract": {
+      "context": "runner-worker-pipeline",
+      "subject": "engine-host-contract",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T22:44:57.534Z",
+      "worker": "1a4404ef-847f-4c5c-8618-235f6364d577",
+      "techniques": [
+        {
+          "technique": "spec-mirrored-hook-surface",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/dispatch.rs:1 Dispatch maps durable JobKind records to handlers. There is no specification-defined host-hook table to mirror."
+        },
+        {
+          "technique": "idle-aware-job-loop",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/serve.rs:111 The serve loop polls a leased job queue over HTTP (the job-coordination subject, which the golden path explicitly excludes). It does not drain microtask or macrotask queues for an engine."
+        },
+        {
+          "technique": "null-and-blocking-executors",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/serve.rs:77 Jobs are claimed from the API with leases. No engine ships a null or blocking promise executor."
+        },
+        {
+          "technique": "contained-async-module-loader",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/labels.rs:99 The runner only reads files the operator names on the CLI. No guest import specifiers are resolved."
+        },
+        {
+          "technique": "monotonic-and-wall-clock-split",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/serve.rs:18 Timing here is the host's own lease heartbeat. No guest timers or dates are exposed through a clock seam."
+        },
+        {
+          "technique": "untraceable-jobs-as-roots",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/Cargo.toml:16 The only 'engine' dependency is the LLM-judge crate. There is no traced guest heap whose jobs could need to be roots."
+        }
+      ]
     }
   }
 }

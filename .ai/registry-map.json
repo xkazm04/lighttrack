@@ -6423,7 +6423,11 @@
           "revision": 2,
           "changedAt": "2026-09-04",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/runner/Cargo.toml:6 lt-runner embeds no language engine: its dependency block has core, render, billing, anon, serde, chrono, clap, reqwest, anyhow and dotenvy, and `lighttrack-engine` is the LLM-judge driver, not an interpreter. I searched the runner sources and the whole repo (*.rs, *.toml) for boa_engine, quickjs, deno_core, rhai, mlua, wasmtime, JobExecutor, HostHooks, ModuleLoader, microtask, interpreter and guest and found nothing, so there are no host hooks, job executors, guest module loader or engine clock seam for this subject to govern.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:dcbd96d1274205ef",
+          "evaluatedRevision": 3
         },
         {
           "subject": "runner-fleet",
