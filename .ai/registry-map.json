@@ -1242,7 +1242,11 @@
           "revision": 3,
           "changedAt": "2026-09-26",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/main.rs:397 The first-start price seed is detected by an empty book. On SQLite and Postgres it is written in one transaction, so the transaction serves as the marker. On the Firestore backend, which this same boot selects at main.rs:388, seed_prices falls back to the Store trait's row-by-row default (crates/store/src/lib.rs:1410). A crash partway through therefore leaves a non-empty partial book that no later start will finish, which is the exact failure the technique names.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:1c83f54ea0028875",
+          "evaluatedRevision": 3
         },
         {
           "subject": "untrusted-extension-host",

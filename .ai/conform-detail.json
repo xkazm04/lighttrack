@@ -8047,6 +8047,47 @@
         }
       ],
       "registryProposal": "refuse-to-derive and provider-family-matching both say aggregates must disclose unpriced rows. Neither says that this covers every aggregate surface, including listing/summary rows such as per-trace summaries, not only the cost-report endpoints. Here, the cost reports and the trace detail view disclose unpriced rows, but the trace list's summary row drops them. A sentence saying 'every aggregate that sums cost, including list/summary rows, carries its unpriced count' would make this gap easy to find."
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/node-boot-and-declarative-bootstrap": {
+      "context": "api-platform",
+      "subject": "node-boot-and-declarative-bootstrap",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:35:58.743Z",
+      "worker": "dcadb2ba-252a-4a5a-a1e3-84734ce49452",
+      "techniques": [
+        {
+          "technique": "once-only-bootstrap-with-marker",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/main.rs:397 Emptiness detection with no marker. Atomicity depends on the backend: SQLite prices::seed (unchecked_transaction) and Postgres prices::seed (pool.begin) commit as one unit. store-firestore does not override seed_prices, so it inherits the row-by-row default, and the trait doc itself admits this 'keeps that half-seed hazard'."
+        },
+        {
+          "technique": "ordered-boot-dag",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/main.rs:484 Boot order: logging, then the credential-boundary refusal (line 351, before the store opens), then store open and seed, then state, then bind. The 'listening' line logs the bound local_addr (485/507), and background sweeps spawn only after the bind. There is no unseal-shaped step, so the replay-diagnostic part of the technique is outside its 'earns its cost' scope. Minor: list_projects().unwrap_or_default() at line 415 silently warms an empty policy cache if the store errors."
+        },
+        {
+          "technique": "reload-partition",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/main.rs:340 All configuration is env read once at boot. Grepping crates/api/src for sighup/reload found no reload handler, so every key is effectively restart-only, which is the technique's 'when not to use' case."
+        },
+        {
+          "technique": "config-objects-are-api-immutable",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/main.rs:394 Config seeds prices once, and from then on the API (PUT /v1/prices) owns them. That is the technique's 'seeded ordinary API object' exclusion. No device kind here is born from both config and the API."
+        },
+        {
+          "technique": "request-chain-not-dsl",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/main.rs:398 The only first-start act is a data-row seed. There is no declarative bootstrap file of privileged requests (no policy or auth creation), so there is nothing to shape as a request chain."
+        },
+        {
+          "technique": "seal-before-storage-plugins",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/main.rs:391 Storage is opened directly and has no sealing boundary. Grepping crates/api/src for seal/unseal found nothing, so there is no pre-unseal component catalog."
+        }
+      ]
     }
   }
 }
