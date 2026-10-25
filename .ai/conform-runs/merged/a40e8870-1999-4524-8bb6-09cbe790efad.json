@@ -1,0 +1,55 @@
+{
+ "schema": "conform-run/1",
+ "worker": "a40e8870-1999-4524-8bb6-09cbe790efad",
+ "subject": "runner-fleet",
+ "evaluatedAt": "2026-10-25T23:53:21.204450+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-worker-pipeline",
+   "subject": "runner-fleet",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/runner/src/dispatch.rs:49 lt-runner is an application job worker. It claims evaluation jobs (BenchRun, ScoreEvents, ScoreTraces, DatasetSample, Calibrate, Contribute) from LightTrack's own API, and it is not a CI/delivery runner that executes builds or deploys; a case-insensitive search of crates/runner for runs-on, self-hosted, actions/cache, sccache and autoscal found nothing, so the subject's precondition (a fleet of machines executing delivery work) does not hold here, and the subject itself hands generic work coordination to job-coordination.",
+   "techniques": [
+    {
+     "technique": "capability-typed-queues",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/serve.rs:31 This looks like the same idea at the application level: workers declare kinds and providers (serve.rs:33-35, providers_from_env). But it routes app jobs, not CI capabilities, so the technique does not govern it."
+    },
+    {
+     "technique": "queue-depth-elasticity",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/serve.rs:111 A single process polls at a fixed interval. Nothing in this context provisions or scales runner capacity."
+    }
+   ],
+   "absenceTerms": [
+    "runs-on",
+    "self-hosted",
+    "actions/cache",
+    "sccache",
+    "autoscal"
+   ],
+   "registryProposal": "The registry map paired runner-fleet with this context, probably because the crate and binary are named 'runner'. An application background-job worker is governed by job-coordination/background-jobs, not by a CI runner fleet. Still, capability-typed-queues has a real application-level analog here: workers declare the kinds and providers they can handle, and a request nobody can satisfy queues and is surfaced to the operator rather than failed. That rule may be worth stating in background-jobs or job-coordination."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T23:53:21.204450+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "runner-fleet"
+   ],
+   "techniques": [
+    "capability-typed-queues",
+    "queue-depth-elasticity"
+   ],
+   "deviations": 0,
+   "context": "runner-worker-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

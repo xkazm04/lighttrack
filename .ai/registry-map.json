@@ -6467,7 +6467,11 @@
           "revision": 2,
           "changedAt": "2026-08-31",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/runner/src/dispatch.rs:49 lt-runner is an application job worker. It claims evaluation jobs (BenchRun, ScoreEvents, ScoreTraces, DatasetSample, Calibrate, Contribute) from LightTrack's own API, and it is not a CI/delivery runner that executes builds or deploys; a case-insensitive search of crates/runner for runs-on, self-hosted, actions/cache, sccache and autoscal found nothing, so the subject's precondition (a fleet of machines executing delivery work) does not hold here, and the subject itself hands generic work coordination to job-coordination.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:8119510164547576",
+          "evaluatedRevision": 3
         },
         {
           "subject": "agent-cli-transport",

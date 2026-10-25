@@ -8124,6 +8124,28 @@
       "evaluatedTs": "2026-10-25T23:49:30.077Z",
       "worker": "2a7eed1a-eb86-4609-8a5d-d2c5de35d74c",
       "techniques": []
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/runner-fleet": {
+      "context": "runner-worker-pipeline",
+      "subject": "runner-fleet",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:53:21.204Z",
+      "worker": "a40e8870-1999-4524-8bb6-09cbe790efad",
+      "techniques": [
+        {
+          "technique": "capability-typed-queues",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/serve.rs:31 This looks like the same idea at the application level: workers declare kinds and providers (serve.rs:33-35, providers_from_env). But it routes app jobs, not CI capabilities, so the technique does not govern it."
+        },
+        {
+          "technique": "queue-depth-elasticity",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/serve.rs:111 A single process polls at a fixed interval. Nothing in this context provisions or scales runner capacity."
+        }
+      ],
+      "registryProposal": "The registry map paired runner-fleet with this context, probably because the crate and binary are named 'runner'. An application background-job worker is governed by job-coordination/background-jobs, not by a CI runner fleet. Still, capability-typed-queues has a real application-level analog here: workers declare the kinds and providers they can handle, and a request nobody can satisfy queues and is surfaced to the operator rather than failed. That rule may be worth stating in background-jobs or job-coordination."
     }
   }
 }
