@@ -6817,7 +6817,11 @@
           "revision": 2,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/prices.rs:16 The stored rate card is a fixed input/output/cached-read trio with no cache-write class (let alone TTL-tiered writes), so premium cache-write traffic can only be priced as plain input or not at all — the under-pricing direction the standard names — and a past dated row can be overwritten in place through the upsert's ON CONFLICT DO UPDATE.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:1f43aefeff056ea5",
+          "evaluatedRevision": 2
         },
         {
           "subject": "breach-alerting-and-attribution",

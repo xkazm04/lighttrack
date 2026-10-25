@@ -7944,6 +7944,43 @@
           "evidence": "crates/runner/Cargo.toml:16 The only 'engine' dependency is the LLM-judge crate. There is no traced guest heap whose jobs could need to be roots."
         }
       ]
+    },
+    "6e365da5-0e1a-415f-8d3f-d66e7f2451a4/llm-price-book-operations": {
+      "context": "sqlite-governance-backend",
+      "subject": "llm-price-book-operations",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T22:56:12.030Z",
+      "worker": "1d253535-4b6f-4b52-ab42-365f276f8d3d",
+      "techniques": [
+        {
+          "technique": "price-row-variant-encoding",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/prices.rs:16 Variants do live in the model key (the price_fill test keys a row \"acme/zoo-1@batch\"), but the rate card is the fixed trio the technique rejects. It has no cache-write rate and no TTL tiers, and config/pricing.json's non-coverage note does not declare that gap."
+        },
+        {
+          "technique": "price-resolution-order",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/price_fill.rs:99 The backfill goes through the same PriceBook::cost_usd_mode resolver as ingest, so there is one resolution path. A miss leaves the row NULL (test an_unpriceable_key_fills_nothing_and_terminates)."
+        },
+        {
+          "technique": "no-retroactive-repricing",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/price_fill.rs:95 Only NULL-cost rows can be written, so stamped costs are never restated. Filled rows are labelled cost_source=book_fill plus priced_at (pricing.rs FILL_SOURCE), and the test asserts a client-costed row stays at 99.0."
+        },
+        {
+          "technique": "price-provenance-and-staleness",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/prices.rs:17 Every row stores effective_from, source_url, verified_at and note. list() hides future-dated rows and history() keeps the timeline. Measuring and showing book age happens in the api crate (measure_posture), outside this context."
+        },
+        {
+          "technique": "hot-swap-price-book",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/prices.rs:27 Persist-then-reread is supported (upsert, then list() re-reads the DB for the rebuild). But the store accepts any caller-supplied effective_from and overwrites an existing dated row in place, despite the module doc calling the table append-only. The api put_price (crates/api/src/prices_fill.rs:108) passes the client's effective_from straight through, so an admin can backdate a rate or rewrite the one that priced last quarter."
+        }
+      ],
+      "registryProposal": "no-retroactive-repricing says an imputed charge is 'never written onto the event'. This repo instead writes a labelled forward-fill (cost_source=book_fill, priced_at) onto previously NULL events, using the current book rather than the rate in force at event time. The technique should say whether a provenance-labelled one-time fill of unpriced rows is allowed, or whether it must stay a projection beside the ledger."
     }
   }
 }
