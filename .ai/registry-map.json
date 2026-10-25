@@ -1052,7 +1052,11 @@
           "revision": 8,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:97 The suite pins the promotion gate to a plain Allow when no baseline exists, and a run with mean 0.10 and no baseline also gets a plain Allow (tests_prompt_gate.rs:219-220). So 'nothing to compare against' cannot be told apart from 'tested and passed', which is the unverified-maps-to-green failure the standard names.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:9548319fbd9c4eae",
+          "evaluatedRevision": 9
         },
         {
           "subject": "test-input-generation",

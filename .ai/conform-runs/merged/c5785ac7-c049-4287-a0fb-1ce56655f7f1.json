@@ -1,0 +1,53 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c5785ac7-c049-4287-a0fb-1ce56655f7f1",
+ "subject": "quality-regression-gating",
+ "evaluatedAt": "2026-10-25T23:43:00.049426+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-integration-tests",
+   "subject": "quality-regression-gating",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/tests_prompt_gate.rs:97 The suite pins the promotion gate to a plain Allow when no baseline exists, and a run with mean 0.10 and no baseline also gets a plain Allow (tests_prompt_gate.rs:219-220). So 'nothing to compare against' cannot be told apart from 'tested and passed', which is the unverified-maps-to-green failure the standard names.",
+   "techniques": [
+    {
+     "technique": "unverified-vs-regressed-exit-states",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:97 The test asserts that a missing baseline gives the same outcome as a pass, with no warning attached. The standard puts 'no baseline recorded' in the unverified bucket, a state separate from passed."
+    },
+    {
+     "technique": "baseline-carries-its-conditions",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_labels.rs:243 The baseline is stored as a bare scalar next to the judge_model field. The run is posted with no judge or dataset conditions, and the gate still returns status 'pass' (line 265). No test checks the judge/dataset-version predicate before the floor is applied. tests_prompt_gate.rs:48 also passes the baseline as Option<f64>."
+    },
+    {
+     "technique": "partial-run-never-green",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:169 Runs with status cancelled, partial(budget) or aborted and a 0.95 mean are blocked. The reason says 'incomplete' and names the cause, not 'regressed', and only force overrides it."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-25T23:43:00.049426+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "quality-regression-gating"
+   ],
+   "techniques": [
+    "baseline-carries-its-conditions",
+    "partial-run-never-green",
+    "unverified-vs-regressed-exit-states"
+   ],
+   "deviations": 1,
+   "context": "api-integration-tests",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

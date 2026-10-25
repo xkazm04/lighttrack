@@ -8088,6 +8088,32 @@
           "evidence": "crates/api/src/main.rs:391 Storage is opened directly and has no sealing boundary. Grepping crates/api/src for seal/unseal found nothing, so there is no pre-unseal component catalog."
         }
       ]
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/quality-regression-gating": {
+      "context": "api-integration-tests",
+      "subject": "quality-regression-gating",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:43:00.049Z",
+      "worker": "c5785ac7-c049-4287-a0fb-1ce56655f7f1",
+      "techniques": [
+        {
+          "technique": "unverified-vs-regressed-exit-states",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:97 The test asserts that a missing baseline gives the same outcome as a pass, with no warning attached. The standard puts 'no baseline recorded' in the unverified bucket, a state separate from passed."
+        },
+        {
+          "technique": "baseline-carries-its-conditions",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_labels.rs:243 The baseline is stored as a bare scalar next to the judge_model field. The run is posted with no judge or dataset conditions, and the gate still returns status 'pass' (line 265). No test checks the judge/dataset-version predicate before the floor is applied. tests_prompt_gate.rs:48 also passes the baseline as Option<f64>."
+        },
+        {
+          "technique": "partial-run-never-green",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:169 Runs with status cancelled, partial(budget) or aborted and a 0.95 mean are blocked. The reason says 'incomplete' and names the cause, not 'regressed', and only force overrides it."
+        }
+      ]
     }
   }
 }
