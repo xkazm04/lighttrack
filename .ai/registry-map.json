@@ -4940,7 +4940,11 @@
           "revision": 7,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:65 The Postgres trace listing folds unpriced spans into the cost sum as $0 and returns no unpriced-span count. TraceSummary (crates/core/src/trace.rs:250) has no field for one, unlike the detail view's TraceTotals.unpriced_spans and this crate's own cost/rollup reads. So a trace of unpriced-model calls is listed as cheap or free: absence presented as an answer.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:a0932e26160bfd85",
+          "evaluatedRevision": 7
         },
         {
           "subject": "telemetry-pii-redaction",

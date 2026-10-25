@@ -8003,6 +8003,48 @@
         }
       ],
       "registryProposal": "revenue-recognition-rules says 'one implementation, many surfaces' but only talks about surfaces. It should also cover storage: a SQL window prefilter that picks candidate revenue rows is a second recognition rule. It must apply the same degenerate-period fallback (start ≥ end → admit by ts), or the pure function never sees rows it would have counted."
+    },
+    "9aa1714b-d868-4684-8328-325d5d249aed/multi-provider-event-normalization": {
+      "context": "pg-event-telemetry",
+      "subject": "multi-provider-event-normalization",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T23:19:54.958Z",
+      "worker": "48426cb3-9730-4dc6-81e5-e7323614d2d0",
+      "techniques": [
+        {
+          "technique": "refuse-to-derive",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:65 Rule: when absence flows downstream, the total must say how many rows it could not price. Trace summaries COALESCE the cost sum to 0 and carry no unpriced count; the `min_cost` HAVING filter also treats unpriced spans as 0. Elsewhere the context follows the rule: write.rs:69-70 binds absent cached/reasoning tokens as NULL, and cost.rs:26 / rollup disclose unpriced calls."
+        },
+        {
+          "technique": "two-doors-one-pipeline",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/events/cols.rs:26 Accounting windows (admission usage_in_tx, the received-at rollup key) use the server's received_at, never the sender's ts. One INSERT value (write.rs insert_query) serves both the pooled write and the admission transaction, so neither door can write a different column set."
+        },
+        {
+          "technique": "deterministic-span-derived-ids",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/events/write.rs:15 A duplicate id becomes a typed Conflict, so the API can read the row back and acknowledge a replay. get() (list.rs:100) passes store failures up as errors instead of returning None. Batch items run in SAVEPOINTs, so one duplicate does not poison the batch. The id itself (trace+span) is composed in the API mapper, which is outside this context."
+        },
+        {
+          "technique": "provider-family-matching",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/events/cols.rs:75 The store's part is keeping provenance: the raw provider column is read back verbatim as an open id, never coerced. cost.rs:26 discloses unpriced calls beside the cost sum. The family matching itself happens before the store."
+        },
+        {
+          "technique": "attribute-precedence-lists",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:22 The store receives an already-mapped LlmEvent. Span attribute names are resolved in the ingest mapper, not here."
+        },
+        {
+          "technique": "per-provider-usage-extractors",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:67 This is a sender-side technique. The store only persists the normalized TokenUsage tuple; it never sees a provider response shape."
+        }
+      ],
+      "registryProposal": "refuse-to-derive and provider-family-matching both say aggregates must disclose unpriced rows. Neither says that this covers every aggregate surface, including listing/summary rows such as per-trace summaries, not only the cost-report endpoints. Here, the cost reports and the trace detail view disclose unpriced rows, but the trace list's summary row drops them. A sentence saying 'every aggregate that sums cost, including list/summary rows, carries its unpriced count' would make this gap easy to find."
     }
   }
 }
