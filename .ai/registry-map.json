@@ -5352,7 +5352,11 @@
           "revision": 12,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/anon/src/lib.rs:124 The crate's whole job is to take a trace string and return a rewritten string plus a redaction count. It never walks a code tree, gathers sensors or emits findings for triage, so the subject's precondition (scanning code at rest for defects) does not hold. A case-insensitive grep of crates/anon for finding, sensor, codebase, dead.?code, scan, triage, read_dir and walkdir returned no hits.",
+          "evaluatedAt": "2026-10-25",
+          "evaluatedAgainst": "sha256-b2:06416fce13bc2342",
+          "evaluatedRevision": 12
         },
         {
           "subject": "agent-instruction-files",

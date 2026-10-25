@@ -7815,6 +7815,38 @@
         "at": "2026-10-24T22:18:10.844504+00:00",
         "reason": "reviewer (sonnet): The absence is real for crates/agent (no browser dependency, and the search returned 0 hits even with extra terms like mcp and chrome). But the technique anchors are incidental, and the agent has an open tool seam. main.rs:3 is only a doc comment. actions.rs:44 is the free-form `allowed_tools: Vec<S"
       }
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/codebase-scanning": {
+      "context": "pii-scrubbing",
+      "subject": "codebase-scanning",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-25",
+      "evaluatedTs": "2026-10-25T22:01:46.722Z",
+      "worker": "44ee8152-13c6-4b71-bbde-1d6002717183",
+      "techniques": [
+        {
+          "technique": "rule-precision-discipline",
+          "verdict": "not-applicable",
+          "evidence": "crates/anon/src/lib.rs:13 These are redaction rules applied to trace text, not detection rules over a codebase. The crate does practise precision discipline in spirit: it documents known collateral matches and the history of an over-broad regex."
+        },
+        {
+          "technique": "sensor-pipeline",
+          "verdict": "not-applicable",
+          "evidence": "crates/anon/src/stamp.rs:38 There is a single pure function over one input string. There are no gathering sensors, no snapshot and no emission stage that could be isolated or skipped."
+        },
+        {
+          "technique": "llm-assisted-scanning",
+          "verdict": "not-applicable",
+          "evidence": "crates/anon/src/lib.rs:6 The model pass lives in the runner, outside this context, and it anonymizes data rather than scanning code."
+        },
+        {
+          "technique": "verify-after-generate",
+          "verdict": "not-applicable",
+          "evidence": "crates/anon/src/export.rs:1 The one generated artifact (pii.json) comes from a deterministic generator and has a drift test. The technique's premise is a model generator, which does not exist here."
+        }
+      ],
+      "registryProposal": "precision-trades-have-a-direction assumes that false positives are visible (users report them) and false negatives are not. A transform-shaped detector such as a redactor reverses this: a false positive silently rewrites stored evidence that a downstream judge reads, while a missed match stays visible in the row. The technique could note that which error direction is visible depends on whether the detector's output is a report or an in-place rewrite."
     }
   }
 }
