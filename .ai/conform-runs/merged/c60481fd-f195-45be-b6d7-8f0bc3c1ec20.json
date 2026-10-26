@@ -1,0 +1,59 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c60481fd-f195-45be-b6d7-8f0bc3c1ec20",
+ "subject": "telemetry-pii-redaction",
+ "evaluatedAt": "2026-10-26T00:08:02.334221+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "pg-event-telemetry",
+   "subject": "telemetry-pii-redaction",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/Cargo.toml:25 The crate's only outbound transport is Postgres, which the operator owns and can delete from. Under the golden path's seam rule, that store belongs to the observability-telemetry and data-retention neighbours, not to this subject's hand-off to a sink you can only ask. Searching crates/store-pg for sentry, before_send, pseudonym and hmac found nothing: no hosted tracker client, no outbound hook and no keyed derivative live here.",
+   "techniques": [
+    {
+     "technique": "emit-site-inventory",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/events/write.rs:41 The store writes the already-dispositioned LlmEvent exactly as the API hands it over. The field inventory and the scrub are upstream in crates/api/src/redact.rs, a different context, and this crate emits to no third-party sink."
+    },
+    {
+     "technique": "denylist-plus-pattern-pass",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/redaction.rs:34 This context only reads back the redaction stamp the ingest scrubber wrote. It runs no keyed pass and no pattern pass of its own, and it has no outbound record to run them on."
+    },
+    {
+     "technique": "correlation-preserving-redaction",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/redaction.rs:52 Nothing in this context pseudonymises identifiers for an external sink. The only redaction-related value here is the posture stamp it decodes."
+    }
+   ],
+   "absenceTerms": [
+    "sentry",
+    "before_send",
+    "pseudonym",
+    "hmac"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-26T00:08:02.334221+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "telemetry-pii-redaction"
+   ],
+   "techniques": [
+    "correlation-preserving-redaction",
+    "denylist-plus-pattern-pass",
+    "emit-site-inventory"
+   ],
+   "deviations": 0,
+   "context": "pg-event-telemetry",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

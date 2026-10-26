@@ -8156,6 +8156,32 @@
       "evaluatedTs": "2026-10-25T23:56:54.060Z",
       "worker": "4922ecf7-7d8c-4f93-915d-e53adba2761f",
       "techniques": []
+    },
+    "9aa1714b-d868-4684-8328-325d5d249aed/telemetry-pii-redaction": {
+      "context": "pg-event-telemetry",
+      "subject": "telemetry-pii-redaction",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-26",
+      "evaluatedTs": "2026-10-26T00:08:02.334Z",
+      "worker": "c60481fd-f195-45be-b6d7-8f0bc3c1ec20",
+      "techniques": [
+        {
+          "technique": "emit-site-inventory",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:41 The store writes the already-dispositioned LlmEvent exactly as the API hands it over. The field inventory and the scrub are upstream in crates/api/src/redact.rs, a different context, and this crate emits to no third-party sink."
+        },
+        {
+          "technique": "denylist-plus-pattern-pass",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/redaction.rs:34 This context only reads back the redaction stamp the ingest scrubber wrote. It runs no keyed pass and no pattern pass of its own, and it has no outbound record to run them on."
+        },
+        {
+          "technique": "correlation-preserving-redaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/redaction.rs:52 Nothing in this context pseudonymises identifiers for an external sink. The only redaction-related value here is the posture stamp it decodes."
+        }
+      ]
     }
   }
 }

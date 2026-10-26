@@ -4980,7 +4980,11 @@
           "revision": 1,
           "changedAt": "2026-09-03",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/Cargo.toml:25 The crate's only outbound transport is Postgres, which the operator owns and can delete from. Under the golden path's seam rule, that store belongs to the observability-telemetry and data-retention neighbours, not to this subject's hand-off to a sink you can only ask. Searching crates/store-pg for sentry, before_send, pseudonym and hmac found nothing: no hosted tracker client, no outbound hook and no keyed derivative live here.",
+          "evaluatedAt": "2026-10-26",
+          "evaluatedAgainst": "sha256-b2:291ed63388cf9602",
+          "evaluatedRevision": 1
         },
         {
           "subject": "usage-event-ingestion",
