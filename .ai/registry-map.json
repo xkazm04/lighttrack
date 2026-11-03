@@ -4461,7 +4461,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/mcp/src/errors.rs:12 Every API 'promotion blocked' body gets the same hand-written lead line, 'latest mean is below its baseline (or no scored run yet)'. But crates/api/src/prompts_gate.rs refuses for at least five other reasons: the run scored a different prompt version, the run has no resolved prompt version, the run was incomplete, the runner reported 'regressed', or the 95% CI fell below baseline. So this agent-facing projection of the gate misstates why it refused, and the remedy it gives ('re-run and re-check') is wrong for some of those reasons.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "operator-surfaces-for-llm-spend",
@@ -7889,7 +7893,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/admission.ts:157 The in-path admission guard rightly opens when it has no evidence. But a never-observed view returns stale:false, which cannot be told apart from a checked-and-clean admit, and index.ts:590 triggers a limits refresh only on stale. So a fresh client folds could-not-check into clean and never fetches its limits until an ingest response arrives.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "test-harness",

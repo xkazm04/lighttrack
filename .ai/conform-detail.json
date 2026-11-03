@@ -8577,6 +8577,88 @@
           "evidence": "crates/store-firestore/tests/conformance.rs:24 The same backend-agnostic, capability-driven suite runs on this backend as on SQLite and Postgres, so the backend is an axis crossed by one suite rather than a separate ad-hoc test set."
         }
       ]
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/quality-gates": {
+      "context": "mcp-server",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T22:16:53.193Z",
+      "worker": "4066aaba-b957-43b4-bacb-d54b5f7035c6",
+      "techniques": [
+        {
+          "technique": "policy-projection",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/errors.rs:12 A hand-walked renderer that covers a subset of the gate's refusal conditions instead of mapping over one enumeration. The original body is kept underneath, but the lead line is the part an agent reads as the decision."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts_tools.rs:168 The gated party is the agent ('the agent manages prompts, gated by benchmarks'), and it can set the gate override (force) as a tool argument in the same session. errors.rs:14 even tells it to. The override channel is writable during the run it authorizes."
+        },
+        {
+          "technique": "oracle-frozen-during-repair",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/tool_contract.rs:89 The pinned snapshot is a golden-file oracle, and the oracle test itself rewrites it and returns green when the env var holds any value. The freeze is prose only ('never to make a red test green'), and the failure message hands the fixer the re-pin command."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tools.rs:111 The write refusal names a remedy the operator can actually run (the env var at launch). The contract-drift panic names `cargo test -p lighttrack-mcp`, which matches the crate name in Cargo.toml."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tool_contract.rs:68 The contract gate compares the runtime-generated tools/list, the resolved artifact, rather than grepping source text."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tool_contract.rs:109 An inventory comparison in both directions. An empty or shrunken surface turns red instead of passing vacuously."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/schemas.rs:242 The gate projection keeps no_runs, no_baseline and partial as states distinct from pass, so an unmeasured run never reads as green."
+        }
+      ]
+    },
+    "3e637b68-74b5-4382-9828-f785f4ed1323/quality-gates": {
+      "context": "typescript-sdk",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T22:16:53.193Z",
+      "worker": "4066aaba-b957-43b4-bacb-d54b5f7035c6",
+      "techniques": [
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/admission.ts:157 The technique says an in-path guard should be open to the actor and loud on its own code. The TTL case does this (admission.ts:169 admitted(true)). The no-observation case folds into clean, and the shared fixture pins that ('never-observed-admits' expects stale:false)."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/contract.test.ts:82 The SDK's PII table is rendered from the server's exported fixture and checked for drift, rather than hand-copied."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/contract.test.ts:93 Besides the text comparison, it asserts the loaded module value against the fixture."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/contract.test.ts:91 The drift refusal names an in-package command, and the regeneration direction (fixture to derived module) is correct."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/index.ts:598 Under enforce=block a refusal throws before the provider call, so the label 'block' is backed by the construction."
+        }
+      ]
     }
   }
 }

@@ -1,0 +1,145 @@
+{
+ "schema": "conform-run/1",
+ "worker": "4066aaba-b957-43b4-bacb-d54b5f7035c6",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-11-03T22:16:53.193177+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "mcp-server",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/mcp/src/errors.rs:12 Every API 'promotion blocked' body gets the same hand-written lead line, 'latest mean is below its baseline (or no scored run yet)'. But crates/api/src/prompts_gate.rs refuses for at least five other reasons: the run scored a different prompt version, the run has no resolved prompt version, the run was incomplete, the runner reported 'regressed', or the 95% CI fell below baseline. So this agent-facing projection of the gate misstates why it refused, and the remedy it gives ('re-run and re-check') is wrong for some of those reasons.",
+   "techniques": [
+    {
+     "technique": "policy-projection",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/errors.rs:12 A hand-walked renderer that covers a subset of the gate's refusal conditions instead of mapping over one enumeration. The original body is kept underneath, but the lead line is the part an agent reads as the decision."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/prompts_tools.rs:168 The gated party is the agent ('the agent manages prompts, gated by benchmarks'), and it can set the gate override (force) as a tool argument in the same session. errors.rs:14 even tells it to. The override channel is writable during the run it authorizes."
+    },
+    {
+     "technique": "oracle-frozen-during-repair",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/tool_contract.rs:89 The pinned snapshot is a golden-file oracle, and the oracle test itself rewrites it and returns green when the env var holds any value. The freeze is prose only ('never to make a red test green'), and the failure message hands the fixer the re-pin command."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/tools.rs:111 The write refusal names a remedy the operator can actually run (the env var at launch). The contract-drift panic names `cargo test -p lighttrack-mcp`, which matches the crate name in Cargo.toml."
+    },
+    {
+     "technique": "match-the-resolved-artifact",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/tool_contract.rs:68 The contract gate compares the runtime-generated tools/list, the resolved artifact, rather than grepping source text."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/tool_contract.rs:109 An inventory comparison in both directions. An empty or shrunken surface turns red instead of passing vacuously."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/schemas.rs:242 The gate projection keeps no_runs, no_baseline and partial as states distinct from pass, so an unmeasured run never reads as green."
+    }
+   ]
+  },
+  {
+   "context": "typescript-sdk",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/typescript/src/admission.ts:157 The in-path admission guard rightly opens when it has no evidence. But a never-observed view returns stale:false, which cannot be told apart from a checked-and-clean admit, and index.ts:590 triggers a limits refresh only on stale. So a fresh client folds could-not-check into clean and never fetches its limits until an ingest response arrives.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/admission.ts:157 The technique says an in-path guard should be open to the actor and loud on its own code. The TTL case does this (admission.ts:169 admitted(true)). The no-observation case folds into clean, and the shared fixture pins that ('never-observed-admits' expects stale:false)."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/contract.test.ts:82 The SDK's PII table is rendered from the server's exported fixture and checked for drift, rather than hand-copied."
+    },
+    {
+     "technique": "match-the-resolved-artifact",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/contract.test.ts:93 Besides the text comparison, it asserts the loaded module value against the fixture."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/contract.test.ts:91 The drift refusal names an in-package command, and the regeneration direction (fixture to derived module) is correct."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/index.ts:598 Under enforce=block a refusal throws before the provider call, so the label 'block' is backed by the construction."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "quality-gates",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/posture.rs, which is not a tracked file"
+  },
+  {
+   "subject": "quality-gates",
+   "context": "evaluation-scoring-types",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "quality-gates",
+   "context": "judge-and-scoring",
+   "reason": "evidence leans on judge/tests/deterministic.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-03T22:16:53.193177+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "match-the-resolved-artifact",
+    "oracle-frozen-during-repair",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "mcp-server",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T22:16:53.193177+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "match-the-resolved-artifact",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "typescript-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
