@@ -586,21 +586,45 @@
       "subject": "test-harness",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T21:56:36.825Z",
-      "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T10:29:10.295Z",
       "techniques": [
+        {
+          "technique": "isolation-lanes",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:61 Collective::from_env reads LIGHTTRACK_COLLECTIVE_ID/ACCEPT/ALLOW_ANON/MIN_CASES. The test fixture inherits whatever the invoker exported. A grep for remove_var/set_var/EnvGuard in crates/api/src found no env lock, although the runner crate has one (core::test_env::EnvGuard)."
+        },
         {
           "technique": "fixture-economics",
           "verdict": "deviation",
-          "evidence": "crates/api/src/tests_ingest.rs:36 Every test invocation in the API test suite calls SqliteStore::open_in_memory(), executing all DDL migration statements anew per test rather than creating a shared template database and cloning it."
+          "evidence": "crates/api/src/tests_ingest.rs:36 Every test calls open_in_memory, which runs schema::apply: pragmas, dated_price_book, and the whole CREATE/ALTER plan. That is a rebuild per test with no template copy, and neither the build cost nor the copy cost is measured. It is cheap in memory, so this is a low-severity breach of the literal rule, and the fixture can never be stale."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_ingest.rs:392 The deadline test was rewritten to hold the only blocking thread, so the timeout becomes a scheduling fact rather than a wall-clock race. One residual: tests_auth_throttle.rs uses a 300ms real-time block window and then sleeps 400ms, which could still drift under heavy load."
         },
         {
           "technique": "unreached-decisions-pin-nothing",
           "verdict": "conformant",
-          "evidence": "crates/api/src/tests_eval_targets.rs:150 The evaluation promotion test refuses a candidate unless positive evidence of the resolved prompt version decision is present in the recorded run, verifying the decision path rather than accepting default success."
+          "evidence": "crates/api/src/tests_ingest.rs:67 The region left deliberately unreachable (the throttle is inert without ConnectInfo) is declared in the fixture that makes it unreachable, and points at the file that reaches it."
         }
-      ]
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:36 Integration test setup repeatedly applies full SQLite schema migrations from scratch on every test case instead of copying a prepared template, incurring substantial migration overhead and violating build-once-copy-per-test fixture economics.",
+          "evaluatedAt": "2026-10-12T21:56:36.825Z",
+          "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+          "reason": "replaced by 43cf118e-6813-433a-8498-8dafeed2d789"
+        }
+      ],
+      "withdrawn": {
+        "worker": "43cf118e-6813-433a-8498-8dafeed2d789",
+        "state": "deviation",
+        "at": "2026-11-03T10:29:48.562632+00:00",
+        "reason": "reviewer (sonnet): The claim that nothing in crates/api/src clears or locks env vars is false: lighttrack_core::test_env::EnvGuard::lock is used in alerts/flush.rs, alerts/tests.rs, collective/contribute.rs, redact.rs, relay_unroutable.rs and schedule_sweep.rs. I also could not confirm that the shared setup() in tests"
+      }
     },
     "45ec4c09-1cbf-41a9-8662-ffa6ca212289/test-harness": {
       "context": "reactive-alert-responder",
@@ -654,29 +678,49 @@
       "subject": "test-harness",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T21:56:36.825Z",
-      "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T10:29:10.295Z",
+      "worker": "43cf118e-6813-433a-8498-8dafeed2d789",
       "techniques": [
         {
           "technique": "approval-snapshots-with-guarded-update",
           "verdict": "deviation",
-          "evidence": "crates/store/tests/parity_doc.rs:33 Re-baselining parity and schema documentation files is controlled by an invisible environment variable without a compile-time source toggle or an integrity test asserting the record mode is disabled in CI."
-        },
-        {
-          "technique": "pin-the-call-not-the-name",
-          "verdict": "deviation",
-          "evidence": "crates/store/tests/ts_format_guard.rs:57 The structural scan for RFC3339 timestamp formatting functions asserts violations is empty but declares no population floor on scanned files or matching sites, risking silent false-clean passes if files are unread."
+          "evidence": "crates/store/tests/schema_doc.rs:26 This is the runtime-flag shape the technique ranks lowest. 'Pass' means 'written', and nothing asserts that the switch is off."
         },
         {
           "technique": "long-lane-certification",
           "verdict": "conformant",
-          "evidence": "crates/store/tests/soak.rs:27 The soak suite runs on an independent cadence with declared trend criteria in soak-criteria.json and structured JSON artifact generation, decoupled from the per-commit merge gate."
+          "evidence": "crates/store/tests/soak.rs:381 Criteria are pre-declared in a committed JSON file pulled in with include_str!. Every run plants a red and asserts it trips write_p95_drift_ratio specifically. Timing bounds are enforced only in the nightly LIGHTTRACK_SOAK_ENFORCE run, and each run emits an artifact."
+        },
+        {
+          "technique": "pin-the-call-not-the-name",
+          "verdict": "deviation",
+          "evidence": "crates/store/tests/ts_format_guard.rs:20 The needle does carry argument tokens, and the allowlist is checked in both directions (line 146). But the walk declares no floor: an unreadable or moved directory returns silently, no scanned-file count is asserted, and zero files scanned reads as green."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/store/tests/legacy/mod.rs:6 The legacy schema fixture records its provenance and why it is frozen, which meets the seeded-data honesty rule. It is a deliberate copy of what shipped, not regenerated from the model."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/store/tests/soak.rs:389 The soak artifact defaults to cargo's per-test scratch directory, not the invoker's current directory."
         },
         {
           "technique": "negative-control-tests",
           "verdict": "conformant",
-          "evidence": "crates/store/tests/soak.rs:381 Every soak run executes a planted drift run with injected latency in the second half, explicitly asserting that the harness fails on the write_p95_drift_ratio criterion."
+          "evidence": "crates/store/tests/soak.rs:381 Every soak run executes a planted drift run with injected latency in the second half, explicitly asserting that the harness fails on the write_p95_drift_ratio criterion.",
+          "carriedFrom": "2026-10-12"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/store/tests/parity_doc.rs:33 Golden documentation and schema snapshots rely on runtime environment variables for re-baselining without a compile-time constant, integrity test, or CI refusal mechanism, allowing tests to re-record silently.",
+          "evaluatedAt": "2026-10-12T21:56:36.825Z",
+          "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+          "reason": "replaced by 43cf118e-6813-433a-8498-8dafeed2d789"
         }
       ]
     },
@@ -685,19 +729,43 @@
       "subject": "test-harness",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T21:56:36.825Z",
-      "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T10:29:10.295Z",
+      "worker": "43cf118e-6813-433a-8498-8dafeed2d789",
       "techniques": [
         {
           "technique": "fixture-economics",
           "verdict": "deviation",
-          "evidence": "crates/store/src/conformance/driver.rs:20 The driver explicitly relies on a shared mutable project and database state where downstream sections depend on events written by earlier sections, creating hidden ordering dependencies."
+          "evidence": "crates/store/src/conformance/driver.rs:20 Sections are coupled by execution order through shared writes. The requirement to run on a remote, non-empty PG/Firestore explains the shared database, but not the order coupling."
         },
         {
           "technique": "derived-selection-must-be-measured",
           "verdict": "conformant",
-          "evidence": "crates/store/src/conformance/refusals.rs:88 The refusal driver measures the exercised methods of undeclared surfaces against Surface::methods(), failing if any method is omitted from refusal verification rather than assuming coverage."
+          "evidence": "crates/store/src/conformance/driver.rs:29 Which sections run is derived from the backend's capability manifest. Every undeclared surface must actively refuse rather than skip, so the run can never select nothing and stay green."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/mod.rs:6 The lane declares what it inherits (a possibly shared database) and isolates each run with fresh project ids, so data left by an earlier run does not decide its result."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/traces.rs:31 The fixture is arranged so only the backend's ordering can produce the asserted order; insertion order cannot."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/traces.rs:15 The section names the defaulting failures it must catch and asserts an explicit Unsupported refusal. This is a documented protection, though the comment records no actual mutation run."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:20 Conformance tests run across surfaces using a single shared mutable store with intentional execution order coupling, preventing test isolation and parallel execution.",
+          "evaluatedAt": "2026-10-12T21:56:36.825Z",
+          "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+          "reason": "replaced by 43cf118e-6813-433a-8498-8dafeed2d789"
         }
       ]
     },
@@ -706,14 +774,28 @@
       "subject": "test-harness",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T21:56:36.825Z",
-      "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T10:29:10.295Z",
+      "worker": "43cf118e-6813-433a-8498-8dafeed2d789",
       "techniques": [
         {
           "technique": "approval-snapshots-with-guarded-update",
           "verdict": "deviation",
-          "evidence": "crates/mcp/src/tool_contract.rs:89 The tool contract snapshot is re-baselined via the runtime environment variable LIGHTTRACK_PIN_TOOL_CONTRACT with no pipeline check to prevent accidental recording in CI and no integrity assertion."
+          "evidence": "crates/mcp/src/tool_contract.rs:89 Unguarded runtime record switch. The structural comparison that names drift per tool (line 109) is the conformant half of the technique."
+        },
+        {
+          "technique": "assert-through-the-reader",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/client.rs:173 The claim is about how the API's router or query parser reads the URL, but the test asserts expected percent-encoded bytes and runs no parser to check that the value decodes as one parameter or one segment."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/mcp/src/tool_contract.rs:89 The MCP server snapshot test permits rewriting the canonical tool-contract.json artifact via an environment variable at runtime without a source-code constant, CI write refusal, or integrity test.",
+          "evaluatedAt": "2026-10-12T21:56:36.825Z",
+          "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+          "reason": "replaced by 43cf118e-6813-433a-8498-8dafeed2d789"
         }
       ]
     },
@@ -8269,6 +8351,27 @@
         "at": "2026-11-03T09:23:49.059256+00:00",
         "reason": "reviewer (sonnet): The claim that the run cannot group runs by prompt version is contradicted by actions.rs:57-59 and exec.rs:48-51, where an author-bumped `version` is passed into PromptIdentity as action_version and the cloud groups by it beside the sha256; only the hash-excludes-system/model/schema part is confirme"
       }
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/test-harness": {
+      "context": "runner-worker-pipeline",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T10:29:10.295Z",
+      "worker": "43cf118e-6813-433a-8498-8dafeed2d789",
+      "techniques": [
+        {
+          "technique": "recorded-interaction-fixtures",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/billing.rs:5 There are no live, record or playback modes for the Stripe exchange. Its tests (lines 121-136) cover only the cutoff arithmetic."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/serve.rs:168 The env-reading test takes a process-wide lock and restores on Drop or unwind, so it neither inherits nor leaks provider keys."
+        }
+      ]
     }
   }
 }
