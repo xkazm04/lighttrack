@@ -1500,7 +1500,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/invocation/tools.rs:48 The read-only posture gate decides a Bash spec by a string prefix, so `Bash(ls && rm -rf .)`, `Bash(cat x > y)` or `Bash(find:*)` (which admits `-delete`/`-exec`) is classified read-only and admitted to a readonly-scan; shell's finite escape forms (`;`, `&&`, `|`, `>`, `$(`) are never refused, and no test covers a compound form.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "agent-runtime-assembly",
@@ -3456,7 +3460,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/calibration.rs:108 When pe=1, Cohen's κ is undefined, and the code sets it to 1.0, so `trusted` becomes true. One agreeing pair (n=1) or any all-pass set certifies a judge. Under `require_trusted_judge` (calibration_record.rs:122) that degenerate value unblocks promotion instead of being refused as unmeasurable.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "test-harness",
@@ -4328,7 +4336,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/judge.rs:510 An exec dimension voided by a sandbox outage (the gate's own instrument hole) is excluded from both the overall and its floor. A case whose floor-1.0, weight-3 exec dimension never ran therefore passes on the remaining dimensions; the test at crates/engine/src/judge/tests/deterministic.rs:278 asserts exactly that.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "test-harness",
@@ -5266,7 +5278,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/tests/conformance.rs:2 The Postgres conformance gate reports an absent database as a passing no-op, with nothing that turns a skip into a failure when it runs as the binding check. The required CI job runs this same test, so dropping or misnaming LIGHTTRACK_TEST_DATABASE_URL would leave that required check green while checking nothing.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "margin-and-unit-economics",
@@ -5803,7 +5819,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/admission.py:151 The in-path pre-spend gate correctly fails open, but with no observation it returns a plain ok that looks the same as checked-and-clean. A failed limits refresh is swallowed with no diagnostic (client.py:527). Under enforce=\"block\" an operator therefore cannot tell 'within budget' from 'never checked'.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "tracing",

@@ -1,0 +1,250 @@
+{
+ "schema": "conform-run/1",
+ "worker": "5bdbddf8-add7-4a68-a906-fa310d6e3d2e",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-11-03T23:29:06.713866+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "claude-invocation-and-execution",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/invocation/tools.rs:48 The read-only posture gate decides a Bash spec by a string prefix, so `Bash(ls && rm -rf .)`, `Bash(cat x > y)` or `Bash(find:*)` (which admits `-delete`/`-exec`) is classified read-only and admitted to a readonly-scan; shell's finite escape forms (`;`, `&&`, `|`, `>`, `$(`) are never refused, and no test covers a compound form.",
+   "techniques": [
+    {
+     "technique": "unparseable-form-is-a-finding",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/invocation/tools.rs:48 Unknown tool names are default-denied (tools.rs:4), but inside Bash(...) the shell's chaining and redirection forms are not refused, so the closed world the gate needs never closes."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/codex/audit.rs:62 The Codex tool audit fails closed when the log is missing, but it silently skips log lines it cannot parse. It also ignores any response_item type outside its LOCAL_CALLS/HOSTED_CALLS lists (line 71), so a new call type exits clean as 'no tool ran'."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/codex/audit.rs:8 The audit stands beside the work. When its evidence (the session log) is missing it refuses to score rather than reading the gap as compliance."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/invocation/posture.rs:151 Each posture refusal names the in-API fix: a with_* builder value the caller controls."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/invocation/posture.rs:7 A contradiction is returned as an Err before spawn, so the refusal sits on the only path to a child process. It is not just a log line."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/calibration.rs:108 When pe=1, Cohen's \u03ba is undefined, and the code sets it to 1.0, so `trusted` becomes true. One agreeing pair (n=1) or any all-pass set certifies a judge. Under `require_trusted_judge` (calibration_record.rs:122) that degenerate value unblocks promotion instead of being refused as unmeasurable.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/calibration.rs:108 A statistic that could not be computed is turned into a passing value with no minimum-n floor. The standard calls for REFUSE here, not a certifying value. The three-valued JudgeTrust (Unknown is not Untrusted) is the right shape, but this path skips it."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/calibration_record.rs:50 The verdict carries the policy (kappa_bar) it was judged under."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/calibration_record.rs:122 Both Untrusted and Unknown block under policy. The blocking path is explicit in code, not in a label."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/score.rs:399 A caller cannot write host-policy keys inside the caller-authored `target` object. The door refuses them and gives each one a host-owned request field."
+    }
+   ]
+  },
+  {
+   "context": "judge-and-scoring",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/judge.rs:510 An exec dimension voided by a sandbox outage (the gate's own instrument hole) is excluded from both the overall and its floor. A case whose floor-1.0, weight-3 exec dimension never ran therefore passes on the remaining dimensions; the test at crates/engine/src/judge/tests/deterministic.rs:278 asserts exactly that.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/judge.rs:510 An instrument hole is resolved as SKIP, where the standard says FAIL-CLOSED (or REFUSE the case). Only the all-voided case is refused (judge.rs:520). The skip is at least rendered per dimension (ScoreDim.voided). Voiding a grounding dimension with zero claims is a subject-world absence, so SKIP is correct there."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/judge.rs:473 Could-not-run, meaning no sample parsed, is returned as an error. It is never turned into a confident 0.0 fail."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/judge.rs:555 Pass is built in code from the threshold and per-dimension floors. It is never taken from the model's own pass field."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/fence.rs:9 The gated candidate writes the artifact the judge reads. Nonce fencing stops it from authoring the verdict, and an imitation attempt is flagged on the outcome."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/scorers.rs:214 A misconfigured dimension is refused with the two fields the operator can actually set."
+    }
+   ],
+   "registryProposal": "unmeasurable-criteria offers FAIL-CLOSED for a partial instrument hole beside the work. In a cross-candidate benchmark that scores the operator's sandbox outage as the candidate's failure and skews the comparison, which is why this code chose SKIP. The technique should name per-case REFUSE (no verdict for that case, counted in the run) as the resolution when the verdict feeds a comparison rather than a merge decision. Without it, implementers fall back to SKIP, and SKIP lets a floor-gated dimension pass unmeasured."
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/tests/conformance.rs:2 The Postgres conformance gate reports an absent database as a passing no-op, with nothing that turns a skip into a failure when it runs as the binding check. The required CI job runs this same test, so dropping or misnaming LIGHTTRACK_TEST_DATABASE_URL would leave that required check green while checking nothing.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/tests/conformance.rs:2 This is an announced skip with no unconditional backstop: the backstop is the same skipping test. metadata_guard.rs follows the same env-gated pattern, although it does seed a known-bad row."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/tests/conformance.rs:17 The skip message names the exact variable that restores the check."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/lib.rs:121 Surfaces this backend cannot serve refuse loudly. They do not answer with an empty success that a gate would read as compliance."
+    }
+   ]
+  },
+  {
+   "context": "python-sdk",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/python/lighttrack/admission.py:151 The in-path pre-spend gate correctly fails open, but with no observation it returns a plain ok that looks the same as checked-and-clean. A failed limits refresh is swallowed with no diagnostic (client.py:527). Under enforce=\"block\" an operator therefore cannot tell 'within budget' from 'never checked'.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/admission.py:151 In-path gates must be open to the actor and loud to the operator, with a distinct code. Stale views get stale=True (line 162). No-evidence does not, and refresh failures never reach the existing Diagnostics stderr channel."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "clients/python/lighttrack/client.py:505 The typed refusal names a constructor/env option the host app controls."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "clients/python/lighttrack/client.py:490 Advisory vs blocking is decided on the code path by enforce. The default is inert by design, and test_admission pins that."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "clients/python/tests/test_contract.py:51 The SDK's PII table is generated from one server-side enumeration and the test fails on drift. It is not hand-maintained per language."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-03T23:29:06.713866+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria",
+    "unparseable-form-is-a-finding"
+   ],
+   "deviations": 1,
+   "context": "claude-invocation-and-execution",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T23:29:06.713866+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "policy-projection",
+    "self-reported-gate-inputs",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T23:29:06.713866+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "judge-and-scoring",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T23:29:06.713866+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "refusal-names-a-reachable-remedy",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T23:29:06.713866+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "python-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
