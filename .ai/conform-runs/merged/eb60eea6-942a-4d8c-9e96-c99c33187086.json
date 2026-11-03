@@ -1,0 +1,263 @@
+{
+ "schema": "conform-run/1",
+ "worker": "eb60eea6-942a-4d8c-9e96-c99c33187086",
+ "subject": "cross-provider-benchmark-operations",
+ "evaluatedAt": "2026-11-03T15:06:05.981636+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:115 The stored verdict's determinism stamp is a free string, and `ScoreDetail::capped` (the only normalisation the API applies on insert) never clamps it, so a label outside exact/best-effort/sampled persists instead of folding to not-recorded.",
+   "techniques": [
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:115 Closed vocabulary not enforced at the type or at insert; canon_determinism exists but is only applied on the collective path."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/bench_target.rs:112 Effort is a typed field on the target and a closed enum (effort.rs parse returns None for unknown words); absence means provider default."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/bench_target.rs:147 Target is a declared provider/model/prompt row, and family comparison for self-preference is mechanical (host for HTTP targets)."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/job.rs:19 cancelling state outside the claimable set, orphaned-cancel settler marker, separate attempts/failures/stale_reclaims counters, JobCancel::AlreadyFinished."
+    },
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/dataset.rs:22 Dataset carries version + frozen; DatasetItem carries source_event_id and an anonymization audit field."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/dataset.rs:123 Read half degrades an unknown rung to None (ungraded, never medium); the strict write half is at the API."
+    },
+    {
+     "technique": "entitlement-exhaustion-is-not-ill-health",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/bench_target.rs:91 The target declaration has no field recording that it is reached via a purchased allowance (claude -p / Codex seats are real targets here); grep for plan/seat/subscription/entitlement in bench_target.rs found nothing."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:38 The shared gate renderer used by the CLI and MCP never reads the GateResponse `caveat` (unfrozen dataset, moved judge or rubric), so it prints NO BASELINE/PARTIAL next to a baseline number with no reason attached.",
+   "techniques": [
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:38 The caveat the API computes is dropped at the shared render layer."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/compare.rs:272 The summary carries `cancelled`, but the shared leaderboard only bannering budget_halted; the CANCELLED banner lives only in the runner's stdout (runner compare.rs:1084), so the CLI and MCP render a cancelled comparison unmarked."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:279 Budget-halted runs get a loud banner above the winner line, and unpriced models mark $ columns as a lower bound."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:238 An Effort column appears when any target declares one; an unset row renders an em dash rather than a guessed level."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:145 The recommendation line prints p, the corrected \u03b1 and n; a refusal prints its reason; excluded/untested rows are named."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:177 Per-tier verdict printed verbatim and descriptively, ungraded bucket shown last, no table for an all-ungraded corpus."
+    },
+    {
+     "technique": "entitlement-exhaustion-is-not-ill-health",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/compare.rs:251 The only absence column is `errored`; health_filtered_cases (and any exhaustion class) never reaches the leaderboard, so absence classes are not rendered distinctly."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-pipeline",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/labels_promote.rs:93 Promoting a label copies the event's stored text straight into a dataset case without lighttrack_anon::scrub (which the import path runs, crates/store/src/dataset_import.rs) and stamps no anonymization audit, so promoted cases skip the dataset-entry scrub.",
+   "techniques": [
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/labels_promote.rs:101 Promoted case is unscrubbed and records no method or placeholder count; freeze is respected (frozen dataset \u2192 409)."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/scores.rs:43 The POST /v1/scores boundary bounds the detail but never clamps detail.determinism to the closed vocabulary."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/difficulty_input.rs:40 A stated write refuses an unknown rung by name, listing the rungs; reads degrade."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:434 The gate treats cancelled/aborted/partial runs as unverified, never as pass."
+    },
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:389 The API emits the method-drift caveat with the verdict (the render layer drops it; see evaluation-rendering)."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/pairwise.rs:139 The paid pairwise round-robin is gated on game count only; its dollar hint covers judge calls but not generation and vanishes when the judge is unpriced, and no live dollar ceiling runs during generation or judging.",
+   "techniques": [
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:134 An unpriced judge silently drops the dollar figure instead of naming the model and printing a lower bound; there is no Budget in this mode."
+    },
+    {
+     "technique": "failure-clustering-recommendations",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/rubric.rs:365 The healing recommendations are LLM prose from per-dimension means only: no case-pattern clustering and no trail back to member cases."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:524 Pairwise stamps generation and judging halves with a weakest-fold headline."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:105 Pairwise design with A/B order debias and a mechanical same-family warning."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/frontier.rs:135 Unpriced/unjudged/no-latency rows are excluded by name, a Bonferroni-corrected walk runs from the cheapest, and a partial run refuses to recommend (line 198)."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/tiers.rs:37 Ungraded is a distinct bucket and an all-ungraded corpus gets no table."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/gate.rs:19 The CI gate maps cancelled/partial/aborted to the unverified exit, never pass."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "cross-provider-benchmark-operations",
+   "context": "runner-benchmark-calibration",
+   "reason": "evidence leans on Ollama/llama.cpp, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-03T15:06:05.981636+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "entitlement-exhaustion-is-not-ill-health",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T15:06:05.981636+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "entitlement-exhaustion-is-not-ill-health",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T15:06:05.981636+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "graded-case-difficulty"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T15:06:05.981636+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "determinism-stamping",
+    "failure-clustering-recommendations",
+    "graded-case-difficulty",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -1536,39 +1536,59 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T02:05:21.316Z",
-      "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T15:06:05.981Z",
+      "worker": "eb60eea6-942a-4d8c-9e96-c99c33187086",
       "techniques": [
-        {
-          "technique": "async-run-queue-with-cancel",
-          "verdict": "conformant",
-          "evidence": "crates/core/src/job.rs:38 The job type contract separates claims, actual failures and stale reclaims, and models cancelling, terminal-cancel outcomes and lease fencing."
-        },
-        {
-          "technique": "dataset-sampling-anonymize-freeze",
-          "verdict": "conformant",
-          "evidence": "crates/core/src/dataset.rs:164 The corpus model carries anonymization audit, source-event identity, frozen/version metadata, lineage and explicit sampling strategies."
-        },
         {
           "technique": "determinism-stamping",
           "verdict": "deviation",
-          "evidence": "crates/core/src/score.rs:115 Plain String deserialization accepts an open vocabulary, and ScoreDetail::capped does not clamp unsupported stamps."
-        },
-        {
-          "technique": "graded-case-difficulty",
-          "verdict": "conformant",
-          "evidence": "crates/core/src/dataset.rs:158 Difficulty is an ordered easy/medium/hard ladder with distinct absence, tolerant stored reads and carriage into BenchmarkCase."
-        },
-        {
-          "technique": "handicap-disclosure-in-the-result-row",
-          "verdict": "deviation",
-          "evidence": "crates/core/src/score.rs:138 The inspected ScoreDetail and GenerationFacts schemas carry generation spend without a typed concession or not-expressible result."
+          "evidence": "crates/core/src/score.rs:115 Closed vocabulary not enforced at the type or at insert; canon_determinism exists but is only applied on the collective path."
         },
         {
           "technique": "sampling-knobs-are-axes-not-strings",
           "verdict": "conformant",
-          "evidence": "crates/core/src/bench_target.rs:112 Effort is a typed optional target axis with conservative suffix parsing, explicit default semantics and distinguishable default labels."
+          "evidence": "crates/core/src/bench_target.rs:112 Effort is a typed field on the target and a closed enum (effort.rs parse returns None for unknown words); absence means provider default."
+        },
+        {
+          "technique": "target-matrix-runs",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/bench_target.rs:147 Target is a declared provider/model/prompt row, and family comparison for self-preference is mechanical (host for HTTP targets)."
+        },
+        {
+          "technique": "async-run-queue-with-cancel",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/job.rs:19 cancelling state outside the claimable set, orphaned-cancel settler marker, separate attempts/failures/stale_reclaims counters, JobCancel::AlreadyFinished."
+        },
+        {
+          "technique": "dataset-sampling-anonymize-freeze",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/dataset.rs:22 Dataset carries version + frozen; DatasetItem carries source_event_id and an anonymization audit field."
+        },
+        {
+          "technique": "graded-case-difficulty",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/dataset.rs:123 Read half degrades an unknown rung to None (ungraded, never medium); the strict write half is at the API."
+        },
+        {
+          "technique": "entitlement-exhaustion-is-not-ill-health",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/bench_target.rs:91 The target declaration has no field recording that it is reached via a purchased allowance (claude -p / Codex seats are real targets here); grep for plan/seat/subscription/entitlement in bench_target.rs found nothing."
+        },
+        {
+          "technique": "handicap-disclosure-in-the-result-row",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/score.rs:138 The inspected ScoreDetail and GenerationFacts schemas carry generation spend without a typed concession or not-expressible result.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:115 The serialized verdict type accepts arbitrary determinism strings without normalizing unknown values to not recorded.",
+          "evaluatedAt": "2026-10-13T02:05:21.316Z",
+          "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
+          "reason": "replaced by eb60eea6-942a-4d8c-9e96-c99c33187086"
         }
       ]
     },
@@ -1577,44 +1597,50 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T00:45:25.776Z",
-      "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T15:06:05.981Z",
+      "worker": "eb60eea6-942a-4d8c-9e96-c99c33187086",
       "techniques": [
         {
           "technique": "axes-and-caveats-live-at-the-surface",
           "verdict": "deviation",
-          "evidence": "crates/render/src/benchmarks.rs:38 The caveat (and judge_trust) from crates/api/src/benchmarks.rs:323 is dropped by the shared render layer."
+          "evidence": "crates/render/src/benchmarks.rs:38 The caveat the API computes is dropped at the shared render layer."
         },
         {
           "technique": "async-run-queue-with-cancel",
           "verdict": "deviation",
-          "evidence": "crates/render/src/compare.rs:272 Only a budget halt gets the PARTIAL banner. The runner's summary has a `cancelled` key, but render never reads it; the runner prints CANCELLED to its own stdout only, so CLI and MCP renders of a cancelled run show no banner."
+          "evidence": "crates/render/src/compare.rs:272 The summary carries `cancelled`, but the shared leaderboard only bannering budget_halted; the CANCELLED banner lives only in the runner's stdout (runner compare.rs:1084), so the CLI and MCP render a cancelled comparison unmarked."
         },
         {
           "technique": "budget-preflight-and-ceiling",
           "verdict": "conformant",
-          "evidence": "crates/render/src/compare.rs:279 Loud partial banner for a budget halt, and the gate maps partial to PARTIAL."
-        },
-        {
-          "technique": "cheapest-sufficient-configuration",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/compare.rs:160 Prints the case count and corrected alpha with the recommendation. Exclusions are named, and the refusal is printed."
-        },
-        {
-          "technique": "graded-case-difficulty",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/compare.rs:177 Per-tier verdict printed verbatim from the runner, with no derivation at render."
+          "evidence": "crates/render/src/compare.rs:279 Budget-halted runs get a loud banner above the winner line, and unpriced models mark $ columns as a lower bound."
         },
         {
           "technique": "sampling-knobs-are-axes-not-strings",
           "verdict": "conformant",
-          "evidence": "crates/render/src/compare.rs:238 Effort column appears when declared, and an unset cell is marked explicitly."
+          "evidence": "crates/render/src/compare.rs:238 An Effort column appears when any target declares one; an unset row renders an em dash rather than a guessed level."
+        },
+        {
+          "technique": "cheapest-sufficient-configuration",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/compare.rs:145 The recommendation line prints p, the corrected α and n; a refusal prints its reason; excluded/untested rows are named."
+        },
+        {
+          "technique": "graded-case-difficulty",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/compare.rs:177 Per-tier verdict printed verbatim and descriptively, ungraded bucket shown last, no table for an all-ungraded corpus."
+        },
+        {
+          "technique": "entitlement-exhaustion-is-not-ill-health",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/compare.rs:251 The only absence column is `errored`; health_filtered_cases (and any exhaustion class) never reaches the leaderboard, so absence classes are not rendered distinctly."
         },
         {
           "technique": "target-matrix-runs",
           "verdict": "conformant",
-          "evidence": "crates/render/src/compare.rs:44 Render does not write 'best' unless handed a tested claim."
+          "evidence": "crates/render/src/compare.rs:44 Render does not write 'best' unless handed a tested claim.",
+          "carriedFrom": "2026-10-24"
         },
         {
           "technique": "determinism-stamping",
@@ -1630,6 +1656,13 @@
           "evaluatedAt": "2026-10-13T02:05:21.316Z",
           "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
           "reason": "replaced by 8f1d66a3-8c39-4dde-8176-c47843a377d3"
+        },
+        {
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:38 The API's GateResponse carries a `caveat` explaining why the baseline is not comparable (unfrozen dataset, judge or rubric change), but the shared gate renderer used by the CLI and MCP never reads it, so it prints NO BASELINE right beside a baseline number with no reason given.",
+          "evaluatedAt": "2026-10-24T00:45:25.776Z",
+          "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+          "reason": "replaced by eb60eea6-942a-4d8c-9e96-c99c33187086"
         }
       ]
     },
@@ -1638,40 +1671,46 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T00:45:25.776Z",
-      "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T15:06:05.981Z",
+      "worker": "eb60eea6-942a-4d8c-9e96-c99c33187086",
       "techniques": [
         {
           "technique": "dataset-sampling-anonymize-freeze",
           "verdict": "deviation",
-          "evidence": "crates/api/src/labels_promote.rs:101 No scrub and no audit on this entry path. The import path does both."
-        },
-        {
-          "technique": "budget-preflight-and-ceiling",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/benchmarks.rs:434 The gate treats a partial, aborted or cancelled run as unverified, never pass."
-        },
-        {
-          "technique": "axes-and-caveats-live-at-the-surface",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/benchmarks.rs:447 The API attaches the comparability caveat to the verdict it downgrades. Render drops it (other context)."
-        },
-        {
-          "technique": "graded-case-difficulty",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/difficulty_input.rs:54 A stated tier is refused by name on write, while reads degrade."
-        },
-        {
-          "technique": "target-matrix-runs",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/benchmarks_target.rs:126 The matrix is declared on the benchmark and validated at write time, rather than degrading at run time."
+          "evidence": "crates/api/src/labels_promote.rs:101 Promoted case is unscrubbed and records no method or placeholder count; freeze is respected (frozen dataset → 409)."
         },
         {
           "technique": "determinism-stamping",
           "verdict": "deviation",
-          "evidence": "crates/api/src/scores.rs:43 The external score boundary only caps provenance sizes; validation and capping leave arbitrary determinism strings intact instead of clamping them to not recorded.",
-          "carriedFrom": "2026-10-13"
+          "evidence": "crates/api/src/scores.rs:43 The POST /v1/scores boundary bounds the detail but never clamps detail.determinism to the closed vocabulary."
+        },
+        {
+          "technique": "graded-case-difficulty",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/difficulty_input.rs:40 A stated write refuses an unknown rung by name, listing the rungs; reads degrade."
+        },
+        {
+          "technique": "async-run-queue-with-cancel",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:434 The gate treats cancelled/aborted/partial runs as unverified, never as pass."
+        },
+        {
+          "technique": "axes-and-caveats-live-at-the-surface",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:389 The API emits the method-drift caveat with the verdict (the render layer drops it; see evaluation-rendering)."
+        },
+        {
+          "technique": "budget-preflight-and-ceiling",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:434 The gate treats a partial, aborted or cancelled run as unverified, never pass.",
+          "carriedFrom": "2026-10-24"
+        },
+        {
+          "technique": "target-matrix-runs",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks_target.rs:126 The matrix is declared on the benchmark and validated at write time, rather than degrading at run time.",
+          "carriedFrom": "2026-10-24"
         },
         {
           "technique": "sampling-knobs-are-axes-not-strings",
@@ -1687,6 +1726,13 @@
           "evaluatedAt": "2026-10-13T02:05:21.316Z",
           "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
           "reason": "replaced by 8f1d66a3-8c39-4dde-8176-c47843a377d3"
+        },
+        {
+          "state": "deviation",
+          "evidence": "crates/api/src/labels_promote.rs:93 Promoting a label copies the event's stored text straight into a dataset case and stamps anonymization: Null, while the import path (crates/store/src/dataset_import.rs:33) runs lighttrack_anon::scrub and records an audit, so promoted cases skip the dataset-entry scrub and carry no anonymization record.",
+          "evaluatedAt": "2026-10-24T00:45:25.776Z",
+          "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+          "reason": "replaced by eb60eea6-942a-4d8c-9e96-c99c33187086"
         }
       ]
     },
@@ -1695,39 +1741,44 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T00:45:25.776Z",
-      "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T15:06:05.981Z",
+      "worker": "eb60eea6-942a-4d8c-9e96-c99c33187086",
       "techniques": [
         {
           "technique": "budget-preflight-and-ceiling",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/pairwise.rs:139 Ceiling counts games, not dollars. The estimate covers judge calls only, and an unpriced judge yields an empty hint (line 134) instead of a named lower bound."
+          "evidence": "crates/runner/src/pairwise.rs:134 An unpriced judge silently drops the dollar figure instead of naming the model and printing a lower bound; there is no Budget in this mode."
+        },
+        {
+          "technique": "failure-clustering-recommendations",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/rubric.rs:365 The healing recommendations are LLM prose from per-dimension means only: no case-pattern clustering and no trail back to member cases."
         },
         {
           "technique": "determinism-stamping",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/pairwise.rs:524 Generation and judging stamped separately, and the headline is the weaker of the two."
+          "evidence": "crates/runner/src/pairwise.rs:524 Pairwise stamps generation and judging halves with a weakest-fold headline."
         },
         {
           "technique": "target-matrix-runs",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/pairwise.rs:105 Same-family pairing recorded as a named warning."
+          "evidence": "crates/runner/src/pairwise.rs:105 Pairwise design with A/B order debias and a mechanical same-family warning."
         },
         {
           "technique": "cheapest-sufficient-configuration",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/stats/frontier.rs:135 Unpriced targets are excluded by name, never priced at $0. A partial run refuses at line 198, and alpha and n are disclosed."
+          "evidence": "crates/runner/src/stats/frontier.rs:135 Unpriced/unjudged/no-latency rows are excluded by name, a Bonferroni-corrected walk runs from the cheapest, and a partial run refuses to recommend (line 198)."
         },
         {
           "technique": "graded-case-difficulty",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/stats/tiers.rs:241 Descriptive verdict. A single-target tier has no answer rather than 'no'."
+          "evidence": "crates/runner/src/stats/tiers.rs:37 Ungraded is a distinct bucket and an all-ungraded corpus gets no table."
         },
         {
           "technique": "async-run-queue-with-cancel",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/gate.rs:19 The gate exit code treats cancelled and partial runs as unverified, never green."
+          "evidence": "crates/runner/src/gate.rs:19 The CI gate maps cancelled/partial/aborted to the unverified exit, never pass."
         },
         {
           "technique": "axes-and-caveats-live-at-the-surface",
@@ -1739,12 +1790,6 @@
           "technique": "entitlement-exhaustion-is-not-ill-health",
           "verdict": "deviation",
           "evidence": "crates/runner/src/pairwise.rs:180 A typed generation refusal becomes a stderr message and an output-less GenCell, losing exhaustion cause and its distinct exclusion diagnosis.",
-          "carriedFrom": "2026-10-13"
-        },
-        {
-          "technique": "failure-clustering-recommendations",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/rubric.rs:364 The healing prompt recommends changes from aggregate dimension means and failure counts, without case-pattern clusters or member-case evidence.",
           "carriedFrom": "2026-10-13"
         },
         {
@@ -1761,6 +1806,13 @@
           "evaluatedAt": "2026-10-13T02:05:21.316Z",
           "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
           "reason": "replaced by 8f1d66a3-8c39-4dde-8176-c47843a377d3"
+        },
+        {
+          "state": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:139 The paid pairwise round-robin is gated on game count only. Its dollar hint leaves out generation calls and silently disappears when the judge is unpriced, and no live dollar ceiling runs during generation or judging.",
+          "evaluatedAt": "2026-10-24T00:45:25.776Z",
+          "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+          "reason": "replaced by eb60eea6-942a-4d8c-9e96-c99c33187086"
         }
       ]
     },
