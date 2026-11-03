@@ -4786,12 +4786,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/scores.rs:1 This context saves judge verdicts, benchmarks, datasets, rubrics, labels, calibrations and prompt versions as evaluation records, not as beliefs an agent recalls; the same search of crates/store-pg (recall/consolidat/episod/belief/distill) found 0 hits, and prompt versions are promoted by a quality gate, not distilled from observed episodes.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
-          "evaluatedRevision": 51,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store-pg/src/scores.rs:1 This context stores judge scores, benchmarks, datasets, rubrics, labels, calibrations and human-authored prompt versions as evaluation records behind a promotion gate, not as beliefs or procedures an agent distills and recalls; a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52,
+          "revisionsBehind": 1
         },
         {
           "subject": "eval-harness",
@@ -4961,12 +4960,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/events/mod.rs:1 Events, traces and rollups are monitored-app telemetry: transcript-like raw records that no stage here turns into recalled agent memory; the search of crates/store-pg for recall/consolidat/episod/belief/distill found 0 hits.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
-          "evaluatedRevision": 51,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store-pg/src/events/mod.rs:1 Events, traces, rollups and redaction posture are telemetry about monitored apps; no stage here turns them into memory an agent recalls (the rollups are cost/usage aggregates, not memory compaction), and a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52,
+          "revisionsBehind": 1
         },
         {
           "subject": "llm-call-telemetry-model",
@@ -5122,12 +5120,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store-pg/src/projects.rs:1 These modules store admin and operational records (projects, keys, prices, jobs, relay leases, alerts) for the API; a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits, so nothing here carries an agent's working, episodic or consolidated state into a model's context.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
-          "evaluatedRevision": 51,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store-pg/src/lib.rs:1 This crate is the Postgres implementation of the application's Store trait (projects, keys, prices, jobs, relay leases, devices, collective leaderboard aggregates, alerts), and a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits, so no agent's working, episodic or consolidated state is carried into a model context here; collective.rs holds k-anonymous aggregate leaderboard rows, not shared agent memories.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52,
+          "revisionsBehind": 1
         },
         {
           "subject": "test-harness",
@@ -5974,12 +5971,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/responder/src/ledger.rs:9 The responder starts each Claude investigation fresh. Its only persisted state is the alert ledger, which is read back only for admission counts (cooldown and hourly cap). The prompt context is telemetry fetched for each run (enrich.rs), so no earlier diagnosis is carried into a later run. A search of crates/responder for recall, consolidat, episod, belief and distill found 0 hits.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
-          "evaluatedRevision": 51,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/responder/src/pipeline.rs:146 Each paid Claude investigation is prompted only from the alert plus telemetry fetched fresh for that run (enrich::recent_failures / recent_scores), and the diagnosis posted back to the alert ledger is read back only as admission counts (ledger.rs: 'is a query, not a memory'), so no earlier diagnosis is recalled into a later run; a search of crates/responder for recall, consolidat, episod, belief and distill found 0 hits (the only 'remember'/'memory' hits are comments about in-process admission counters).",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52,
+          "revisionsBehind": 1
         },
         {
           "subject": "test-harness",
@@ -7864,12 +7860,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/store/src/lib.rs:3 The trait and its DTOs define application persistence between the API and its backends, with no stages for capture, consolidation, decay or recall injection; a search of crates/store/src for recall, consolidat, episod, belief and distill found 0 hits. The many 'memory' hits are SQLite in-memory test databases, which is why that word is left out of the terms.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:4f054116d66a9495",
-          "evaluatedRevision": 51,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store/src/lib.rs:3 The trait and its DTOs define how the API persists data across backends and have no stages for capture, consolidation, decay or recall injection; a search of the whole crates/store tree for recall, consolidat, episod, belief and distill found 0 hits ('remember' does appear in comments in collective.rs, so it is left out of the terms).",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52,
+          "revisionsBehind": 1
         }
       ],
       "governance": "governed"

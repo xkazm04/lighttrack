@@ -6,9 +6,9 @@
       "subject": "agent-memory",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:47:58.579Z",
-      "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T11:32:50.417Z",
+      "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
       "techniques": [
         {
           "technique": "consolidation",
@@ -36,6 +36,13 @@
           "evaluatedAt": "2026-10-12T19:27:35.191Z",
           "worker": "021113af-c543-448c-b39d-6d749628db22",
           "reason": "replaced by 964b23bd-b15e-499d-bfd3-b4559524a5fa"
+        },
+        {
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/projects.rs:1 These modules store admin and operational records (projects, keys, prices, jobs, relay leases, alerts) for the API; a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits, so nothing here carries an agent's working, episodic or consolidated state into a model's context.",
+          "evaluatedAt": "2026-10-24T01:47:58.579Z",
+          "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+          "reason": "replaced by f12068f1-93ab-4cb9-82d8-75c34b42a4c3"
         }
       ]
     },
@@ -44,9 +51,9 @@
       "subject": "agent-memory",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:47:58.579Z",
-      "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T11:32:50.417Z",
+      "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
       "techniques": [
         {
           "technique": "episodic-capture",
@@ -74,6 +81,13 @@
           "evaluatedAt": "2026-10-12T19:27:35.191Z",
           "worker": "021113af-c543-448c-b39d-6d749628db22",
           "reason": "replaced by 964b23bd-b15e-499d-bfd3-b4559524a5fa"
+        },
+        {
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/events/mod.rs:1 Events, traces and rollups are monitored-app telemetry: transcript-like raw records that no stage here turns into recalled agent memory; the search of crates/store-pg for recall/consolidat/episod/belief/distill found 0 hits.",
+          "evaluatedAt": "2026-10-24T01:47:58.579Z",
+          "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+          "reason": "replaced by f12068f1-93ab-4cb9-82d8-75c34b42a4c3"
         }
       ]
     },
@@ -82,9 +96,9 @@
       "subject": "agent-memory",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:47:58.579Z",
-      "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T11:32:50.417Z",
+      "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
       "techniques": [
         {
           "technique": "pending-beliefs-live-apart",
@@ -106,6 +120,13 @@
           "evaluatedAt": "2026-10-12T19:27:35.191Z",
           "worker": "021113af-c543-448c-b39d-6d749628db22",
           "reason": "replaced by 964b23bd-b15e-499d-bfd3-b4559524a5fa"
+        },
+        {
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/scores.rs:1 This context saves judge verdicts, benchmarks, datasets, rubrics, labels, calibrations and prompt versions as evaluation records, not as beliefs an agent recalls; the same search of crates/store-pg (recall/consolidat/episod/belief/distill) found 0 hits, and prompt versions are promoted by a quality gate, not distilled from observed episodes.",
+          "evaluatedAt": "2026-10-24T01:47:58.579Z",
+          "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+          "reason": "replaced by f12068f1-93ab-4cb9-82d8-75c34b42a4c3"
         }
       ]
     },
@@ -114,9 +135,9 @@
       "subject": "agent-memory",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:47:58.579Z",
-      "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T11:32:50.417Z",
+      "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
       "techniques": [
         {
           "technique": "observation-clock",
@@ -150,6 +171,13 @@
           "evaluatedAt": "2026-10-12T19:27:35.191Z",
           "worker": "021113af-c543-448c-b39d-6d749628db22",
           "reason": "replaced by 964b23bd-b15e-499d-bfd3-b4559524a5fa"
+        },
+        {
+          "state": "not-applicable",
+          "evidence": "crates/store/src/lib.rs:3 The trait and its DTOs define application persistence between the API and its backends, with no stages for capture, consolidation, decay or recall injection; a search of crates/store/src for recall, consolidat, episod, belief and distill found 0 hits. The many 'memory' hits are SQLite in-memory test databases, which is why that word is left out of the terms.",
+          "evaluatedAt": "2026-10-24T01:47:58.579Z",
+          "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+          "reason": "replaced by f12068f1-93ab-4cb9-82d8-75c34b42a4c3"
         }
       ]
     },
@@ -7343,10 +7371,19 @@
       "subject": "agent-memory",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:47:58.579Z",
-      "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
-      "techniques": []
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T11:32:50.417Z",
+      "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
+      "techniques": [],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/responder/src/ledger.rs:9 The responder starts each Claude investigation fresh. Its only persisted state is the alert ledger, which is read back only for admission counts (cooldown and hourly cap). The prompt context is telemetry fetched for each run (enrich.rs), so no earlier diagnosis is carried into a later run. A search of crates/responder for recall, consolidat, episod, belief and distill found 0 hits.",
+          "evaluatedAt": "2026-10-24T01:47:58.579Z",
+          "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
+          "reason": "replaced by f12068f1-93ab-4cb9-82d8-75c34b42a4c3"
+        }
+      ]
     },
     "45ec4c09-1cbf-41a9-8662-ffa6ca212289/eval-harness": {
       "context": "reactive-alert-responder",

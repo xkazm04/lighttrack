@@ -1,0 +1,148 @@
+{
+ "schema": "conform-run/1",
+ "worker": "f12068f1-93ab-4cb9-82d8-75c34b42a4c3",
+ "subject": "agent-memory",
+ "evaluatedAt": "2026-11-03T11:32:50.417401+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "pg-platform-operations",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/lib.rs:1 This crate is the Postgres implementation of the application's Store trait (projects, keys, prices, jobs, relay leases, devices, collective leaderboard aggregates, alerts), and a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits, so no agent's working, episodic or consolidated state is carried into a model context here; collective.rs holds k-anonymous aggregate leaderboard rows, not shared agent memories.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "episod",
+    "belief",
+    "distill"
+   ]
+  },
+  {
+   "context": "reactive-alert-responder",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/responder/src/pipeline.rs:146 Each paid Claude investigation is prompted only from the alert plus telemetry fetched fresh for that run (enrich::recent_failures / recent_scores), and the diagnosis posted back to the alert ledger is read back only as admission counts (ledger.rs: 'is a query, not a memory'), so no earlier diagnosis is recalled into a later run; a search of crates/responder for recall, consolidat, episod, belief and distill found 0 hits (the only 'remember'/'memory' hits are comments about in-process admission counters).",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "episod",
+    "belief",
+    "distill"
+   ]
+  },
+  {
+   "context": "pg-evaluation-store",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/scores.rs:1 This context stores judge scores, benchmarks, datasets, rubrics, labels, calibrations and human-authored prompt versions as evaluation records behind a promotion gate, not as beliefs or procedures an agent distills and recalls; a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "episod",
+    "belief",
+    "distill"
+   ]
+  },
+  {
+   "context": "pg-event-telemetry",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/events/mod.rs:1 Events, traces, rollups and redaction posture are telemetry about monitored apps; no stage here turns them into memory an agent recalls (the rollups are cost/usage aggregates, not memory compaction), and a search of crates/store-pg for recall, consolidat, episod, belief and distill found 0 hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "episod",
+    "belief",
+    "distill"
+   ]
+  },
+  {
+   "context": "store-trait-and-types",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/lib.rs:3 The trait and its DTOs define how the API persists data across backends and have no stages for capture, consolidation, decay or recall injection; a search of the whole crates/store tree for recall, consolidat, episod, belief and distill found 0 hits ('remember' does appear in comments in collective.rs, so it is left out of the terms).",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "episod",
+    "belief",
+    "distill"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-03T11:32:50.417401+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T11:32:50.417401+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T11:32:50.417401+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T11:32:50.417401+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-event-telemetry",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T11:32:50.417401+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "store-trait-and-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
