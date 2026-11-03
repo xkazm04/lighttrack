@@ -1146,7 +1146,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/main.rs:3 Core API wiring (router, auth, throttling, health, OpenAPI, idempotency) makes no model call and owns no prompt assembler. A search of crates/api/src for compaction, max_tokens, cache_control, interpolat and context_window found nothing; the 'prompt' hits in main.rs are route wiring to the registry handlers.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "multi-provider-gateway-plane",
@@ -3130,12 +3134,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/render/src/lib.rs:6 Searched crates/render for system-prompt assembly, token budgets, cache breakpoints, compaction, and template interpolation and found none; this crate only turns API JSON into Markdown, including a verbatim dump of stored prompt text.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
-          "evaluatedRevision": 43,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/render/src/lib.rs:5 The crate is a pure JSON-to-Markdown layer with no engine dependency, and a search of crates/render (src and tests) for compaction, max_tokens, cache_control, interpolat and context_window found nothing. It assembles no model prompt; its one prompt-related output is a verbatim, fence-safe dump of stored registry content (prompts.rs:38) for a human or an MCP caller.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44,
+          "revisionsBehind": 1
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -6036,7 +6039,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/enrich.rs:61 The enrichment feeder stops at 10 failure lines (12 for scores) and adds no notice of what it dropped, so the investigator reads a partial view as if it were complete. The error_prompt/quality_prompt assemblers also turn missing numbers into confident zeros.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "breach-alerting-and-attribution",

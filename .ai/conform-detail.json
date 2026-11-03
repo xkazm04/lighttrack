@@ -827,19 +827,29 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T23:56:33.821Z",
-      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T09:23:01.098Z",
+      "worker": "332a306c-677a-4d8f-9dd3-78b4e5c40ecc",
       "techniques": [
         {
           "technique": "layered-composition",
           "verdict": "not-applicable",
-          "evidence": "crates/render/src/prompts.rs:59 Resolved prompt text is copied into a display fence, not composed as model-facing layers."
+          "evidence": "crates/render/src/prompts.rs:38 This shows stored prompt text. It does not compose a prompt for a model call."
         },
         {
           "technique": "variable-interpolation",
           "verdict": "not-applicable",
-          "evidence": "crates/render/src/prompts.rs:41 The renderer reads a finished string and does not fill template holes."
+          "evidence": "crates/render/src/prompts.rs:41 The renderer reads a finished string and does not fill template holes.",
+          "carriedFrom": "2026-10-12"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:6 Searched crates/render for system-prompt assembly, token budgets, cache breakpoints, compaction, and template interpolation and found none; this crate only turns API JSON into Markdown, including a verbatim dump of stored prompt text.",
+          "evaluatedAt": "2026-10-12T23:56:33.821Z",
+          "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+          "reason": "replaced by 332a306c-677a-4d8f-9dd3-78b4e5c40ecc"
         }
       ]
     },
@@ -8182,6 +8192,83 @@
           "evidence": "crates/store-pg/src/redaction.rs:52 Nothing in this context pseudonymises identifiers for an external sink. The only redaction-related value here is the posture stamp it decodes."
         }
       ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/prompt-assembly": {
+      "context": "reactive-alert-responder",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T09:23:01.098Z",
+      "worker": "332a306c-677a-4d8f-9dd3-78b4e5c40ecc",
+      "techniques": [
+        {
+          "technique": "layered-composition",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/investigate.rs:37 There is one assembler function per prompt family (error_prompt, quality_prompt, build_fix_prompt), each taking typed inputs. The pipeline passes the result straight to investigate and appends nothing (pipeline.rs:146)."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/investigate.rs:40 A missing count renders as 'Spike: 0 failed call(s)'. Likewise, a missing drop_pct or baseline renders as '~0%' and '0.00' (line 70ff). These are fabricated values, not declared defaults or an omitted section. The hint and verify inputs do use honest '(none configured)' defaults."
+        },
+        {
+          "technique": "context-budgeting",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/enrich.rs:61 The feeder cap is silent: no '…N more not shown' line reaches the prompt. The fenced spike error string and each event's error have no length cap at all, and the prompt has no overall budget."
+        },
+        {
+          "technique": "task-envelope",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/investigate.rs:59 Locate is present (line 46: repo is the cwd, plus an area hint), and Done is a section list. There is no Check step, such as 'open each cited file:line and confirm it before reporting'. The section list is an enumeration, which a model can satisfy by shape alone. The opening line (45) states the situation, not an expertise claim."
+        }
+      ]
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/prompt-assembly": {
+      "context": "api-platform",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T09:23:01.098Z",
+      "worker": "332a306c-677a-4d8f-9dd3-78b4e5c40ecc",
+      "techniques": []
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/prompt-assembly": {
+      "context": "device-relay-agent",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T09:23:01.098Z",
+      "techniques": [
+        {
+          "technique": "fingerprinting-and-cache-keys",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/report.rs:98 The digest covers the per-call payload, which the standard says to exclude, and omits the system/model/schema standing inputs, which it says to include. As a result it can neither group runs by prompt version nor detect a change to the system layer."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/actions.rs:199 An unresolved placeholder fails the assembly loudly and names itself, rather than rendering as an empty string. Trust classes for params are not declared; I did not judge that against prompt-safety."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/actions.rs:186 There is one renderer per action, fed typed task data. The system layer travels as its own field (exec.rs:97) instead of being concatenated."
+        },
+        {
+          "technique": "context-budgeting",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/actions.rs:214 {{payload}} inlines the whole network-supplied payload with no cap, no budget and no truncation notice."
+        }
+      ],
+      "withdrawn": {
+        "worker": "332a306c-677a-4d8f-9dd3-78b4e5c40ecc",
+        "state": "deviation",
+        "at": "2026-11-03T09:23:49.059256+00:00",
+        "reason": "reviewer (sonnet): The claim that the run cannot group runs by prompt version is contradicted by actions.rs:57-59 and exec.rs:48-51, where an author-bumped `version` is passed into PromptIdentity as action_version and the cloud groups by it beside the sha256; only the hash-excludes-system/model/schema part is confirme"
+      }
     }
   }
 }
