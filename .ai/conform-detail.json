@@ -8496,37 +8496,44 @@
       "context": "device-relay-agent",
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
-      "state": "unknown",
+      "state": "deviation",
       "evaluatedAt": "2026-11-03",
-      "evaluatedTs": "2026-11-03T09:23:01.098Z",
+      "evaluatedTs": "2026-11-03T23:59:02.222Z",
+      "worker": "71de26cf-021d-417f-93d9-1f1c4f5df91d",
       "techniques": [
         {
           "technique": "fingerprinting-and-cache-keys",
           "verdict": "deviation",
-          "evidence": "crates/agent/src/report.rs:98 The digest covers the per-call payload, which the standard says to exclude, and omits the system/model/schema standing inputs, which it says to include. As a result it can neither group runs by prompt version nor detect a change to the system layer."
-        },
-        {
-          "technique": "variable-interpolation",
-          "verdict": "conformant",
-          "evidence": "crates/agent/src/actions.rs:199 An unresolved placeholder fails the assembly loudly and names itself, rather than rendering as an empty string. Trust classes for params are not declared; I did not judge that against prompt-safety."
+          "evidence": "crates/agent/src/report.rs:98 The digest covers the per-call payload, which the technique says to keep out. It does not cover the standing layers it says to put in: the system prompt (spec.system), the model and the schema."
         },
         {
           "technique": "layered-composition",
           "verdict": "conformant",
-          "evidence": "crates/agent/src/actions.rs:186 There is one renderer per action, fed typed task data. The system layer travels as its own field (exec.rs:97) instead of being concatenated."
+          "evidence": "crates/agent/src/exec.rs:97 The standing system layer comes from action.toml and is passed separately from the task layer rendered from prompt.md. One render function builds the task text, and no call site concatenates prompt text."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/actions.rs:199 A placeholder that resolves to nothing stops rendering with an error that names it, instead of rendering an empty string. Variables are not given a trust class when they are declared. Payload from the network can only reach the task template, because the system prompt is never templated."
+        },
+        {
+          "technique": "pinned-prompt-clock",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/actions.rs:212 The resolver only knows task_id, action_type, payload and params.*. Rendering never reads a date or clock."
+        },
+        {
+          "technique": "history-compaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:119 Each task is one CLI invocation with no transcript carried over from earlier turns, so there is no history to compact."
         },
         {
           "technique": "context-budgeting",
           "verdict": "deviation",
-          "evidence": "crates/agent/src/actions.rs:214 {{payload}} inlines the whole network-supplied payload with no cap, no budget and no truncation notice."
+          "evidence": "crates/agent/src/actions.rs:214 {{payload}} inlines the whole network-supplied payload with no cap, no budget and no truncation notice.",
+          "carriedFrom": "2026-11-03"
         }
       ],
-      "withdrawn": {
-        "worker": "332a306c-677a-4d8f-9dd3-78b4e5c40ecc",
-        "state": "deviation",
-        "at": "2026-11-03T09:23:49.059256+00:00",
-        "reason": "reviewer (sonnet): The claim that the run cannot group runs by prompt version is contradicted by actions.rs:57-59 and exec.rs:48-51, where an author-bumped `version` is passed into PromptIdentity as action_version and the cloud groups by it beside the sha256; only the hash-excludes-system/model/schema part is confirme"
-      }
+      "registryProposal": "fingerprinting-and-cache-keys is written around reusing sessions. Its rule about what goes in the digest (standing layers in, per-call payload out) applies just as much to a stateless per-call fingerprint ledger used to spot prompt regressions. A use_when trigger for that case would make the technique apply here without stretching it."
     },
     "a8ab2575-58d9-4252-9a56-6af87205ef60/test-harness": {
       "context": "runner-worker-pipeline",
@@ -9048,6 +9055,21 @@
           "evidence": "crates/api/src/collective/scorecard.rs:51 Quality, pass rate, cost per case and p50/p95 are carried per row."
         }
       ]
+    },
+    "6e365da5-0e1a-415f-8d3f-d66e7f2451a4/prompt-assembly": {
+      "context": "sqlite-governance-backend",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:59:02.222Z",
+      "techniques": [],
+      "withdrawn": {
+        "worker": "71de26cf-021d-417f-93d9-1f1c4f5df91d",
+        "state": "not-applicable",
+        "at": "2026-11-03T23:59:28.208996+00:00",
+        "reason": "reviewer (sonnet): The anchor revenue.rs:202 is only a JSON-path match, so it doesn't show that prompt handling is absent. The same sqlite directory has prompts.rs, which stores prompts and prompt versions, and it is not among the context files. The searched terms (compaction, system_prompt, render_prompt, context_win"
+      }
     }
   }
 }

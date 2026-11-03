@@ -1,0 +1,99 @@
+{
+  "schema": "conform-run/1",
+  "worker": "71de26cf-021d-417f-93d9-1f1c4f5df91d",
+  "subject": "prompt-assembly",
+  "evaluatedAt": "2026-11-03T23:59:02.222156+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "device-relay-agent",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/agent/src/report.rs:98 The fingerprint is a sha256 of the rendered prompt.md only. It includes each task's own params, so every distinct payload adds a new action_type x prompt_sha256 row to the cloud ledger (crates/api/src/relay_actions.rs) and a change in params looks like a prompt change. It leaves out the action's system prompt, model and schema, so editing `system` in action.toml changes what the model reads and the fingerprint stays the same.",
+      "techniques": [
+        {
+          "technique": "fingerprinting-and-cache-keys",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/report.rs:98 The digest covers the per-call payload, which the technique says to keep out. It does not cover the standing layers it says to put in: the system prompt (spec.system), the model and the schema."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/exec.rs:97 The standing system layer comes from action.toml and is passed separately from the task layer rendered from prompt.md. One render function builds the task text, and no call site concatenates prompt text."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/actions.rs:199 A placeholder that resolves to nothing stops rendering with an error that names it, instead of rendering an empty string. Variables are not given a trust class when they are declared. Payload from the network can only reach the task template, because the system prompt is never templated."
+        },
+        {
+          "technique": "pinned-prompt-clock",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/actions.rs:212 The resolver only knows task_id, action_type, payload and params.*. Rendering never reads a date or clock."
+        },
+        {
+          "technique": "history-compaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:119 Each task is one CLI invocation with no transcript carried over from earlier turns, so there is no history to compact."
+        }
+      ],
+      "registryProposal": "fingerprinting-and-cache-keys is written around reusing sessions. Its rule about what goes in the digest (standing layers in, per-call payload out) applies just as much to a stateless per-call fingerprint ledger used to spot prompt regressions. A use_when trigger for that case would make the technique apply here without stretching it."
+    }
+  ],
+  "declined": [
+    {
+      "subject": "prompt-assembly",
+      "context": "evaluation-pipeline",
+      "reason": "the seat returned unknown"
+    },
+    {
+      "subject": "prompt-assembly",
+      "context": "pg-evaluation-store",
+      "reason": "absence contradicted: crates/store-pg/src/alerts.rs:167 contains 'assemble' (1 hit(s) in the context's directories)"
+    },
+    {
+      "subject": "prompt-assembly",
+      "context": "pg-platform-operations",
+      "reason": "absence contradicted: crates/store-pg/src/alerts.rs:167 contains 'assemble' (1 hit(s) in the context's directories)"
+    },
+    {
+      "subject": "prompt-assembly",
+      "context": "sqlite-governance-backend",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor revenue.rs:202 is only a JSON-path match, so it doesn't show that prompt handling is absent. The same sqlite directory has prompts.rs, which stores prompts and prompt versions, and it is not among the context files. The searched terms (compaction, system_prompt, render_prompt, context_win"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-03T23:59:02.222156+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "prompt-assembly"
+      ],
+      "techniques": [
+        "fingerprinting-and-cache-keys",
+        "history-compaction",
+        "layered-composition",
+        "pinned-prompt-clock",
+        "variable-interpolation"
+      ],
+      "deviations": 1,
+      "context": "device-relay-agent",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-03T23:59:02.222156+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "prompt-assembly"
+      ],
+      "techniques": [],
+      "deviations": 0,
+      "context": "sqlite-governance-backend",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
