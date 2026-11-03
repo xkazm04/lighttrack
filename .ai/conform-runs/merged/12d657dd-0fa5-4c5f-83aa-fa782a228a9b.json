@@ -1,0 +1,106 @@
+{
+ "schema": "conform-run/1",
+ "worker": "12d657dd-0fa5-4c5f-83aa-fa782a228a9b",
+ "subject": "mcp-tools",
+ "evaluatedAt": "2026-11-03T22:54:31.594397+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-rendering",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/prompts.rs:52 get_prompt output, which lt-mcp returns verbatim as the tool result (crates/mcp/src/tools.rs:127), puts the stored prompt's operator-written note straight into the renderer's own bullet list. The prompt content is fenced, but nothing labels it as data rather than instruction, so stored text reads in the tool's voice inside an agent's context.",
+   "techniques": [
+    {
+     "technique": "untrusted-result-handling",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/prompts.rs:52 Stored free text goes unfenced into the server's own bullet list, so the tool's voice is not kept separate from stored text. The same pattern appears at datasets.rs:55 (Source). The content fence at prompts.rs:57 only stops early close-out: it carries no attribution and no 'data, not instructions' framing."
+    }
+   ]
+  },
+  {
+   "context": "device-relay-agent",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/agent/Cargo.toml:14 lt-agent neither serves nor consumes a tool protocol. It drives the Claude Code CLI through the engine seam using that host's built-in tool permission specs (allowed_tools, permission_mode). A case-insensitive search of crates/agent for mcp, jsonrpc, tools/list, readOnlyHint and inputSchema found no hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "mcp",
+    "jsonrpc",
+    "tools/list",
+    "readOnlyHint",
+    "inputSchema"
+   ]
+  },
+  {
+   "context": "reactive-alert-responder",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/responder/Cargo.toml:16 lt-responder only spawns headless Claude through the engine seam, with built-in tools gated by permission mode. It exposes no tool server and connects to none. A case-insensitive search of crates/responder for mcp, jsonrpc, tools/list, readOnlyHint and inputSchema found no hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "mcp",
+    "jsonrpc",
+    "tools/list",
+    "readOnlyHint",
+    "inputSchema"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "mcp-tools",
+   "context": "api-platform",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "mcp-tools",
+   "context": "api-integration-tests",
+   "reason": "None of the 25 listed test files contains a tool-protocol construct; a search for mcp, readOnlyHint and jsonrpc hit none of them. A not-applicable claim would still be refused, because the context's directory (crates/api/src) holds MCP references in files outside the list (tests_limits_preview.rs:308, logging.rs:9). No technique could be anchored in the listed files."
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-03T22:54:31.594397+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "untrusted-result-handling"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T22:54:31.594397+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "device-relay-agent",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T22:54:31.594397+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

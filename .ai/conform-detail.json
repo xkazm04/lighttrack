@@ -8743,6 +8743,42 @@
           "evidence": "clients/python/tests/test_instrument.py:30 The fake client uses the cheapest fixture for linkage claims and disables the file-writing journal."
         }
       ]
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/mcp-tools": {
+      "context": "evaluation-rendering",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T22:54:31.594Z",
+      "worker": "12d657dd-0fa5-4c5f-83aa-fa782a228a9b",
+      "techniques": [
+        {
+          "technique": "untrusted-result-handling",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/prompts.rs:52 Stored free text goes unfenced into the server's own bullet list, so the tool's voice is not kept separate from stored text. The same pattern appears at datasets.rs:55 (Source). The content fence at prompts.rs:57 only stops early close-out: it carries no attribution and no 'data, not instructions' framing."
+        }
+      ]
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/mcp-tools": {
+      "context": "device-relay-agent",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T22:54:31.594Z",
+      "worker": "12d657dd-0fa5-4c5f-83aa-fa782a228a9b",
+      "techniques": []
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/mcp-tools": {
+      "context": "reactive-alert-responder",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T22:54:31.594Z",
+      "worker": "12d657dd-0fa5-4c5f-83aa-fa782a228a9b",
+      "techniques": []
     }
   }
 }

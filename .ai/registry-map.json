@@ -2611,7 +2611,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/agent/Cargo.toml:14 lt-agent neither serves nor consumes a tool protocol. It drives the Claude Code CLI through the engine seam using that host's built-in tool permission specs (allowed_tools, permission_mode). A case-insensitive search of crates/agent for mcp, jsonrpc, tools/list, readOnlyHint and inputSchema found no hits.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "agent-cli-transport",
@@ -3186,7 +3190,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/prompts.rs:52 get_prompt output, which lt-mcp returns verbatim as the tool result (crates/mcp/src/tools.rs:127), puts the stored prompt's operator-written note straight into the renderer's own bullet list. The prompt content is fenced, but nothing labels it as data rather than instruction, so stored text reads in the tool's voice inside an agent's context.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "test-harness",
@@ -6093,7 +6101,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/responder/Cargo.toml:16 lt-responder only spawns headless Claude through the engine seam, with built-in tools gated by permission mode. It exposes no tool server and connects to none. A case-insensitive search of crates/responder for mcp, jsonrpc, tools/list, readOnlyHint and inputSchema found no hits.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "prompt-assembly",
