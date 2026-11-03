@@ -1844,12 +1844,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/cli/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/cli returned zero hits; the manifest demonstrates that this crate implements an operator management CLI for querying and administering the LightTrack API rather than a transport for spawning headless coding agents.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
-          "evaluatedRevision": 9,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/cli/Cargo.toml:20 A search of crates/cli for Command::new, claude -p, codex exec, spawn_bounded and resolve_claude_bin found zero hits; the only std::process uses are exit() calls. The operator CLI talks HTTP to the API and spawns no coding-agent child.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10,
+          "revisionsBehind": 1
         },
         {
           "subject": "mcp-tools",
@@ -2632,12 +2631,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/agent/src/main.rs:50 The relay agent relies on file-existence credential checks rather than a zero-token authorization probe and aborts immediately when missing rather than degrading through a fallback ladder.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
-          "evaluatedRevision": 9,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/agent/src/main.rs:52 The agent refuses to start only when the binary is missing. The auth answer, itself inferred from a credential file, is printed and never acted on, so an unauthorized device still leases relay tasks and burns attempts.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10,
+          "revisionsBehind": 1
         },
         {
           "subject": "voice-io",
@@ -4516,12 +4514,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/mcp/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/mcp returned zero hits; the manifest declares an MCP server providing tools over stdio rather than an application invoking headless agent CLIs as model transports.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
-          "evaluatedRevision": 9,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/mcp/Cargo.toml:19 A search of crates/mcp for Command::new, claude -p, codex exec, spawn_bounded and resolve_claude_bin found zero hits. The crate is a blocking-HTTP client of the LightTrack API that serves MCP over stdio; it spawns no agent CLI as a model transport.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10,
+          "revisionsBehind": 1
         },
         {
           "subject": "test-harness",
@@ -5589,12 +5586,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/engine/src/providers.rs:371 The candidate generation dispatcher inverts the fallback ladder by prioritizing metered API calls over local flat-rate agent CLI seats and fails directly on missing CLI binaries without an inspectable fallback ladder.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
-          "evaluatedRevision": 9,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/engine/src/providers.rs:371 When ANTHROPIC_API_KEY happens to be in the host environment, all Anthropic generation silently moves from the claude -p seat to metered Messages API billing. Billing direction is decided by what is ambient in the environment, not by explicit configuration at the door.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10,
+          "revisionsBehind": 1
         },
         {
           "subject": "model-call-outcome-integrity",

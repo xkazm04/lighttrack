@@ -1,0 +1,184 @@
+{
+ "schema": "conform-run/1",
+ "worker": "2a9d3a9e-7bad-47a9-978e-e22679f8e8c9",
+ "subject": "agent-cli-transport",
+ "evaluatedAt": "2026-11-03T16:27:46.736815+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "device-relay-agent",
+   "subject": "agent-cli-transport",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/agent/src/main.rs:52 The agent refuses to start only when the binary is missing. The auth answer, itself inferred from a credential file, is printed and never acted on, so an unauthorized device still leases relay tasks and burns attempts.",
+   "techniques": [
+    {
+     "technique": "availability-probe",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/main.rs:52 Only installation gates work. Authorization (file-existence based, from the shared probe) does not."
+    },
+    {
+     "technique": "fallback-ladder",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/main.rs:54 A relay action has no deterministic stand-in, so honest refusal is the right rung. It happens before leasing and names the cause and the fix."
+    },
+    {
+     "technique": "subscription-auth-selection",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/main.rs:41 Device keys and connector secrets are loaded into the process environment, and every claude child inherits them. Readonly-scan and edit runs over cloud-supplied payloads get those secrets too, because the door strips only ANTHROPIC_API_KEY. The technique asks for a built allowlist environment for children that read untrusted content."
+    },
+    {
+     "technique": "output-normalization",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/exec.rs:168 exec.rs:140 does check out.ok(), and the subtype is surfaced. But an envelope with a missing or empty `result` settles `succeeded` with empty text, so an empty answer reads as success."
+    },
+    {
+     "technique": "permission-stance-enforcement",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/exec.rs:100 action.toml permission_mode is passed through verbatim, and the seam refuses nothing non-empty, so `bypassPermissions` is accepted for edit. Edit does sit behind an opt-in workspaces_root that defaults to unset."
+    },
+    {
+     "technique": "thread-custody-across-resume",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/exec.rs:96 One fresh invocation per leased task. No session id is stored or resumed (grep for resume/session_id in crates/agent/src found nothing)."
+    }
+   ]
+  },
+  {
+   "context": "mcp-server",
+   "subject": "agent-cli-transport",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/mcp/Cargo.toml:19 A search of crates/mcp for Command::new, claude -p, codex exec, spawn_bounded and resolve_claude_bin found zero hits. The crate is a blocking-HTTP client of the LightTrack API that serves MCP over stdio; it spawns no agent CLI as a model transport.",
+   "techniques": [],
+   "absenceTerms": [
+    "Command::new",
+    "claude -p",
+    "codex exec",
+    "spawn_bounded",
+    "resolve_claude_bin"
+   ]
+  },
+  {
+   "context": "cli-infrastructure",
+   "subject": "agent-cli-transport",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/cli/Cargo.toml:20 A search of crates/cli for Command::new, claude -p, codex exec, spawn_bounded and resolve_claude_bin found zero hits; the only std::process uses are exit() calls. The operator CLI talks HTTP to the API and spawns no coding-agent child.",
+   "techniques": [],
+   "absenceTerms": [
+    "Command::new",
+    "claude -p",
+    "codex exec",
+    "spawn_bounded",
+    "resolve_claude_bin"
+   ]
+  },
+  {
+   "context": "provider-generation",
+   "subject": "agent-cli-transport",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/providers.rs:371 When ANTHROPIC_API_KEY happens to be in the host environment, all Anthropic generation silently moves from the claude -p seat to metered Messages API billing. Billing direction is decided by what is ambient in the environment, not by explicit configuration at the door.",
+   "techniques": [
+    {
+     "technique": "subscription-auth-selection",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:371 The env key's presence chooses metered over seat. That is exactly the precedence accident the technique exists to prevent, even though DECISIONS D9 documents the reason."
+    },
+    {
+     "technique": "fallback-ladder",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:368 The ladder is inverted: the metered API outranks an available CLI seat. Which rung served a call is not recorded as an explicit label on the outcome."
+    },
+    {
+     "technique": "output-normalization",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/providers.rs:443 An empty CLI answer becomes EmptyCompletion, never success."
+    },
+    {
+     "technique": "permission-stance-enforcement",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/providers.rs:437 Generation goes through the typed generate seam: no tools, no permission mode, neutral cwd."
+    },
+    {
+     "technique": "thread-custody-across-resume",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/chat.rs:106 Stateless: the whole conversation is rendered into each prompt, so no thread id is stored."
+    }
+   ],
+   "registryProposal": "fallback-ladder puts the local CLI seat as rung 1 on economics. This repo measured (D9) about 40k tokens of auto-loaded context per claude -p call and chose the bare API when a key exists. The technique could say the rung order follows measured per-call economics and must be explicit configuration, not fixed CLI-first."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-cli-transport",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/mod.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-03T16:27:46.736815+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-cli-transport"
+   ],
+   "techniques": [
+    "availability-probe",
+    "fallback-ladder",
+    "output-normalization",
+    "permission-stance-enforcement",
+    "subscription-auth-selection",
+    "thread-custody-across-resume"
+   ],
+   "deviations": 1,
+   "context": "device-relay-agent",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T16:27:46.736815+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-cli-transport"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "mcp-server",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T16:27:46.736815+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-cli-transport"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "cli-infrastructure",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T16:27:46.736815+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-cli-transport"
+   ],
+   "techniques": [
+    "fallback-ladder",
+    "output-normalization",
+    "permission-stance-enforcement",
+    "subscription-auth-selection",
+    "thread-custody-across-resume"
+   ],
+   "deviations": 1,
+   "context": "provider-generation",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

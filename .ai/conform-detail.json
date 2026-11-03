@@ -2545,54 +2545,66 @@
       "subject": "agent-cli-transport",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T08:29:01.292Z",
-      "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T16:27:46.736Z",
+      "worker": "2a9d3a9e-7bad-47a9-978e-e22679f8e8c9",
       "techniques": [
         {
           "technique": "availability-probe",
           "verdict": "deviation",
-          "evidence": "crates/agent/src/main.rs:50 Relies on engine probe which infers auth from credentials file existence rather than running a zero-token check in the child environment."
-        },
-        {
-          "technique": "child-observed-posture",
-          "verdict": "deviation",
-          "evidence": "crates/agent/src/main.rs:52 Bails out on probe failure without inspecting child-observed posture or verifying context delivery via an echo token."
-        },
-        {
-          "technique": "dated-capability-matrix",
-          "verdict": "deviation",
-          "evidence": "crates/agent/src/actions.rs:23 Action specifications define model, timeout, and options without referencing a dated capability matrix tracking CLI versions."
+          "evidence": "crates/agent/src/main.rs:52 Only installation gates work. Authorization (file-existence based, from the shared probe) does not."
         },
         {
           "technique": "fallback-ladder",
-          "verdict": "deviation",
-          "evidence": "crates/agent/src/main.rs:53 Aborts startup immediately if the CLI binary is missing instead of falling back to alternate providers or a deterministic floor."
-        },
-        {
-          "technique": "host-routed-approval-round-trip",
-          "verdict": "not-applicable",
-          "evidence": "crates/agent/src/run.rs:2 Relay agent executes background tasks unattended with no interactive human operator to route approvals to."
-        },
-        {
-          "technique": "output-normalization",
           "verdict": "conformant",
-          "evidence": "crates/agent/src/exec.rs:159 Parses structured schema JSON results versus text envelopes and checks outcome error flags before settling."
-        },
-        {
-          "technique": "permission-stance-enforcement",
-          "verdict": "conformant",
-          "evidence": "crates/agent/src/actions.rs:125 Validates action mode against declared workspaces, confining scan/edit runs strictly within workspaces_root."
+          "evidence": "crates/agent/src/main.rs:54 A relay action has no deterministic stand-in, so honest refusal is the right rung. It happens before leasing and names the cause and the fix."
         },
         {
           "technique": "subscription-auth-selection",
-          "verdict": "conformant",
-          "evidence": "crates/agent/src/run.rs:40 Configures the engine invocation with bare: false to enforce subscription OAuth and strip API keys at the spawn door."
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/main.rs:41 Device keys and connector secrets are loaded into the process environment, and every claude child inherits them. Readonly-scan and edit runs over cloud-supplied payloads get those secrets too, because the door strips only ANTHROPIC_API_KEY. The technique asks for a built allowlist environment for children that read untrusted content."
+        },
+        {
+          "technique": "output-normalization",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/exec.rs:168 exec.rs:140 does check out.ok(), and the subtype is surfaced. But an envelope with a missing or empty `result` settles `succeeded` with empty text, so an empty answer reads as success."
+        },
+        {
+          "technique": "permission-stance-enforcement",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/exec.rs:100 action.toml permission_mode is passed through verbatim, and the seam refuses nothing non-empty, so `bypassPermissions` is accepted for edit. Edit does sit behind an opt-in workspaces_root that defaults to unset."
         },
         {
           "technique": "thread-custody-across-resume",
           "verdict": "not-applicable",
-          "evidence": "crates/agent/src/run.rs:1 Relay tasks are discrete, single-turn executions without session or thread resumption."
+          "evidence": "crates/agent/src/exec.rs:96 One fresh invocation per leased task. No session id is stored or resumed (grep for resume/session_id in crates/agent/src found nothing)."
+        },
+        {
+          "technique": "child-observed-posture",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/main.rs:52 Bails out on probe failure without inspecting child-observed posture or verifying context delivery via an echo token.",
+          "carriedFrom": "2026-10-13"
+        },
+        {
+          "technique": "dated-capability-matrix",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/actions.rs:23 Action specifications define model, timeout, and options without referencing a dated capability matrix tracking CLI versions.",
+          "carriedFrom": "2026-10-13"
+        },
+        {
+          "technique": "host-routed-approval-round-trip",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:2 Relay agent executes background tasks unattended with no interactive human operator to route approvals to.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/agent/src/main.rs:50 The relay agent relies on file-existence credential checks rather than a zero-token authorization probe and aborts immediately when missing rather than degrading through a fallback ladder.",
+          "evaluatedAt": "2026-10-13T08:29:01.292Z",
+          "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+          "reason": "replaced by 2a9d3a9e-7bad-47a9-978e-e22679f8e8c9"
         }
       ]
     },
@@ -2601,54 +2613,72 @@
       "subject": "agent-cli-transport",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T08:29:01.292Z",
-      "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T16:27:46.736Z",
+      "worker": "2a9d3a9e-7bad-47a9-978e-e22679f8e8c9",
       "techniques": [
         {
           "technique": "availability-probe",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:34 MCP server does not probe or invoke external agent CLI binaries."
+          "evidence": "crates/mcp/src/main.rs:34 MCP server does not probe or invoke external agent CLI binaries.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "child-observed-posture",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:51 Processes standard input as an MCP server rather than monitoring child process posture."
+          "evidence": "crates/mcp/src/main.rs:51 Processes standard input as an MCP server rather than monitoring child process posture.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "dated-capability-matrix",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/rpc.rs:15 Declares MCP server capabilities rather than tracking agent CLI feature matrices."
+          "evidence": "crates/mcp/src/rpc.rs:15 Declares MCP server capabilities rather than tracking agent CLI feature matrices.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "fallback-ladder",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:43 MCP server runs as a JSON-RPC daemon with no CLI transport fallback ladder."
+          "evidence": "crates/mcp/src/main.rs:43 MCP server runs as a JSON-RPC daemon with no CLI transport fallback ladder.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "host-routed-approval-round-trip",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:78 Handles MCP tool dispatch over stdio without routing child approval prompts."
+          "evidence": "crates/mcp/src/main.rs:78 Handles MCP tool dispatch over stdio without routing child approval prompts.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "output-normalization",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/rpc.rs:22 Formats MCP JSON-RPC tool responses rather than normalizing agent CLI envelope dialects."
+          "evidence": "crates/mcp/src/rpc.rs:22 Formats MCP JSON-RPC tool responses rather than normalizing agent CLI envelope dialects.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "permission-stance-enforcement",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:9 Controls MCP tool write permissions rather than setting subprocess agent stances."
+          "evidence": "crates/mcp/src/main.rs:9 Controls MCP tool write permissions rather than setting subprocess agent stances.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "subscription-auth-selection",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:11 Authenticates with LightTrack API via HTTP headers rather than managing child subprocess billing environments."
+          "evidence": "crates/mcp/src/main.rs:11 Authenticates with LightTrack API via HTTP headers rather than managing child subprocess billing environments.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "thread-custody-across-resume",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/rpc.rs:16 Stateless JSON-RPC request-response handling without thread custody across resume."
+          "evidence": "crates/mcp/src/rpc.rs:16 Stateless JSON-RPC request-response handling without thread custody across resume.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/mcp/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/mcp returned zero hits; the manifest declares an MCP server providing tools over stdio rather than an application invoking headless agent CLIs as model transports.",
+          "evaluatedAt": "2026-10-13T08:29:01.292Z",
+          "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+          "reason": "replaced by 2a9d3a9e-7bad-47a9-978e-e22679f8e8c9"
         }
       ]
     },
@@ -2657,54 +2687,72 @@
       "subject": "agent-cli-transport",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T08:29:01.292Z",
-      "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T16:27:46.736Z",
+      "worker": "2a9d3a9e-7bad-47a9-978e-e22679f8e8c9",
       "techniques": [
         {
           "technique": "availability-probe",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/main.rs:70 Operator CLI issues HTTP health requests rather than probing agent CLI installations."
+          "evidence": "crates/cli/src/main.rs:70 Operator CLI issues HTTP health requests rather than probing agent CLI installations.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "child-observed-posture",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/main.rs:68 Parses user CLI arguments rather than monitoring child process execution posture."
+          "evidence": "crates/cli/src/main.rs:68 Parses user CLI arguments rather than monitoring child process execution posture.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "dated-capability-matrix",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/main.rs:72 Queries platform API capabilities rather than tracking agent CLI feature support."
+          "evidence": "crates/cli/src/main.rs:72 Queries platform API capabilities rather than tracking agent CLI feature support.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "fallback-ladder",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/http.rs:15 Communicates directly with the LightTrack API without an agent CLI fallback ladder."
+          "evidence": "crates/cli/src/http.rs:15 Communicates directly with the LightTrack API without an agent CLI fallback ladder.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "host-routed-approval-round-trip",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/http.rs:70 HTTP client for API management commands without mid-turn approval routing."
+          "evidence": "crates/cli/src/http.rs:70 HTTP client for API management commands without mid-turn approval routing.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "output-normalization",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/http.rs:33 Presents API JSON responses in tabular or JSON format rather than normalizing agent CLI envelopes."
+          "evidence": "crates/cli/src/http.rs:33 Presents API JSON responses in tabular or JSON format rather than normalizing agent CLI envelopes.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "permission-stance-enforcement",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/query.rs:25 Constructs HTTP query strings rather than enforcing subprocess agent permission stances."
+          "evidence": "crates/cli/src/query.rs:25 Constructs HTTP query strings rather than enforcing subprocess agent permission stances.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "subscription-auth-selection",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/http.rs:72 Passes API bearer tokens via HTTP headers rather than selecting child subprocess billing keys."
+          "evidence": "crates/cli/src/http.rs:72 Passes API bearer tokens via HTTP headers rather than selecting child subprocess billing keys.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "thread-custody-across-resume",
           "verdict": "not-applicable",
-          "evidence": "crates/cli/src/main.rs:115 Manages recurring API job schedules rather than maintaining child agent conversation threads."
+          "evidence": "crates/cli/src/main.rs:115 Manages recurring API job schedules rather than maintaining child agent conversation threads.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/cli/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/cli returned zero hits; the manifest demonstrates that this crate implements an operator management CLI for querying and administering the LightTrack API rather than a transport for spawning headless coding agents.",
+          "evaluatedAt": "2026-10-13T08:29:01.292Z",
+          "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+          "reason": "replaced by 2a9d3a9e-7bad-47a9-978e-e22679f8e8c9"
         }
       ]
     },
@@ -2713,54 +2761,68 @@
       "subject": "agent-cli-transport",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T08:29:01.292Z",
-      "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T16:27:46.736Z",
+      "worker": "2a9d3a9e-7bad-47a9-978e-e22679f8e8c9",
       "techniques": [
         {
-          "technique": "availability-probe",
+          "technique": "subscription-auth-selection",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:375 Dispatches to the Claude CLI when API keys are absent without first running an availability probe."
-        },
-        {
-          "technique": "child-observed-posture",
-          "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:435 Dispatches CLI runs without verifying child-observed posture or checking context delivery with an echo token."
-        },
-        {
-          "technique": "dated-capability-matrix",
-          "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:351 Routes provider calls using hardcoded procedural logic rather than a dated capability matrix."
+          "evidence": "crates/engine/src/providers.rs:371 The env key's presence chooses metered over seat. That is exactly the precedence accident the technique exists to prevent, even though DECISIONS D9 documents the reason."
         },
         {
           "technique": "fallback-ladder",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:371 Inverts fallback order by preferring metered API calls over local agent CLI flat-rate seats, with no deterministic floor."
-        },
-        {
-          "technique": "host-routed-approval-round-trip",
-          "verdict": "not-applicable",
-          "evidence": "crates/engine/src/providers.rs:229 Provider candidate generation operates unattended in batch mode with no interactive approval surface."
+          "evidence": "crates/engine/src/providers.rs:368 The ladder is inverted: the metered API outranks an available CLI seat. Which rung served a call is not recorded as an explicit label on the outcome."
         },
         {
           "technique": "output-normalization",
           "verdict": "conformant",
-          "evidence": "crates/engine/src/providers.rs:449 Maps raw CLI outcomes into normalized GenOutcome text, token counts, latency, and cost."
+          "evidence": "crates/engine/src/providers.rs:443 An empty CLI answer becomes EmptyCompletion, never success."
         },
         {
           "technique": "permission-stance-enforcement",
           "verdict": "conformant",
-          "evidence": "crates/engine/src/providers.rs:437 Enforces Mode::Generate, guaranteeing toolless completion in a neutral temporary working directory."
-        },
-        {
-          "technique": "subscription-auth-selection",
-          "verdict": "conformant",
-          "evidence": "crates/engine/src/providers.rs:441 Configures invocation with bare flag, causing invocation::run to strip API keys for subscription OAuth."
+          "evidence": "crates/engine/src/providers.rs:437 Generation goes through the typed generate seam: no tools, no permission mode, neutral cwd."
         },
         {
           "technique": "thread-custody-across-resume",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/providers.rs:349 Candidate generation is strictly single-prompt without thread continuation or session resumption."
+          "evidence": "crates/engine/src/chat.rs:106 Stateless: the whole conversation is rendered into each prompt, so no thread id is stored."
+        },
+        {
+          "technique": "availability-probe",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:375 Dispatches to the Claude CLI when API keys are absent without first running an availability probe.",
+          "carriedFrom": "2026-10-13"
+        },
+        {
+          "technique": "child-observed-posture",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:435 Dispatches CLI runs without verifying child-observed posture or checking context delivery with an echo token.",
+          "carriedFrom": "2026-10-13"
+        },
+        {
+          "technique": "dated-capability-matrix",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:351 Routes provider calls using hardcoded procedural logic rather than a dated capability matrix.",
+          "carriedFrom": "2026-10-13"
+        },
+        {
+          "technique": "host-routed-approval-round-trip",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:229 Provider candidate generation operates unattended in batch mode with no interactive approval surface.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "registryProposal": "fallback-ladder puts the local CLI seat as rung 1 on economics. This repo measured (D9) about 40k tokens of auto-loaded context per claude -p call and chose the bare API when a key exists. The technique could say the rung order follows measured per-call economics and must be explicit configuration, not fixed CLI-first.",
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/engine/src/providers.rs:371 The candidate generation dispatcher inverts the fallback ladder by prioritizing metered API calls over local flat-rate agent CLI seats and fails directly on missing CLI binaries without an inspectable fallback ladder.",
+          "evaluatedAt": "2026-10-13T08:29:01.292Z",
+          "worker": "e6df2fd6-26c4-4022-aaaa-1fdae2dbe7ea",
+          "reason": "replaced by 2a9d3a9e-7bad-47a9-978e-e22679f8e8c9"
         }
       ]
     },
