@@ -580,3 +580,24 @@ mod corpus;
 /// The freeform contract: locally-computed pass, measured counters, one prompt. See `freeform.rs`.
 #[cfg(test)]
 mod freeform;
+
+/// `run_text` reads `cfg.model` as the same `[provider/]model` spec the judges read, not as a raw
+/// `claude -p` model id. A gemini spec with no Gemini key must fail in the Gemini adapter, by name,
+/// and never spawn the Claude CLI (which would have received `gemini/...` as its model).
+#[test]
+fn run_text_resolves_the_spec_like_the_judges_do() {
+    let mut env = lighttrack_core::test_env::EnvGuard::lock();
+    env.remove("GEMINI_API_KEY")
+        .remove("GOOGLE_API_KEY")
+        .remove("GOOGLE_GENERATIVE_AI_API_KEY");
+    let cfg = EngineConfig {
+        claude_bin: "lighttrack-test-no-such-claude-binary".into(),
+        model: "gemini/gemini-2.5-flash".into(),
+        ..EngineConfig::default()
+    };
+    match run_text(&cfg, "rewrite this") {
+        Err(EngineError::Other(msg)) => assert!(msg.contains("Gemini"), "{msg}"),
+        Err(EngineError::Spawn { bin, .. }) => panic!("spec sent to the Claude CLI ({bin})"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}

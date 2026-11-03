@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use lighttrack_core::Rubric;
 
-use crate::invocation::{self, Invocation};
 use crate::parse::{extract_json_value, Parsed};
 use crate::pool;
 use crate::prompts::{build_rubric_prompt, build_rubric_schema, Prompt};
@@ -161,14 +160,18 @@ fn weighted(dims: &[(String, f64)], rubric: &Rubric) -> f64 {
     }
 }
 
-/// Free-form text generation on Claude (anonymization / healing paragraphs).
+/// Free-form text generation (anonymization / healing paragraphs) on the configured judge spec.
+///
+/// `cfg.model` is a `[provider/]model[@effort]` spec, so it is resolved by the same parser and
+/// dispatched through the same door ([`crate::providers::generate`]) as every judge call. This used
+/// to hand the raw spec to `claude -p`: `anthropic/opus@xhigh` reached the CLI as the model id
+/// `anthropic/opus`, and `gemini/...` went to Claude at all, while the judges in the same run read
+/// the identical field as (provider, model). One field, two readers, two meanings.
 pub fn run_text(cfg: &EngineConfig, prompt: &str) -> Result<TextOutcome> {
-    let out = invocation::run(
-        &cfg.claude(),
-        &Invocation::generate(prompt, &cfg.model).with_bare(cfg.bare),
-    )?;
+    let (provider, model) = parse_judge_spec(&cfg.model);
+    let out = crate::providers::generate(cfg, &provider, &model, None, prompt, None)?;
     Ok(TextOutcome {
-        text: out.text,
+        text: out.output,
         cost_usd: out.cost_usd,
         model: out.model,
         latency_ms: out.latency_ms,
