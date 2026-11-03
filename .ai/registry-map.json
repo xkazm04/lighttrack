@@ -3736,7 +3736,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-firestore/src/lib.rs:1 This context is a Store-trait backend that calls the Firestore REST API; a search of crates/store-firestore for mcp, readOnlyHint, jsonrpc and tools/list found zero hits, so there is no tool server, tool host or tool catalog here for any mcp-tools technique to govern.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "prompt-assembly",
@@ -4096,7 +4100,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/gateway/src/wire.rs:1 The gateway speaks the OpenAI chat-completions shape and only passes function-calling `tools`/`tool_calls` through to OpenAI-shaped providers (it never executes a tool). The golden path explicitly excludes a model's own function-calling format from this subject, and a search of crates/gateway for mcp, readOnlyHint, jsonrpc and tools/list found zero hits.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "multi-provider-event-normalization",
@@ -7834,7 +7842,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store/src/schema/mod.rs:1 This context is a declarative table/migration DSL rendered to SQLite/Postgres/BigQuery DDL; a search of crates/store/src/schema for mcp, readOnlyHint, jsonrpc, tools/list and inputSchema found zero hits, so it neither serves nor consumes a tool protocol and no mcp-tools technique has a precondition here.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         }
       ],
       "governance": "governed"

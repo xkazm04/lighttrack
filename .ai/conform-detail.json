@@ -8779,6 +8779,36 @@
       "evaluatedTs": "2026-11-03T22:54:31.594Z",
       "worker": "12d657dd-0fa5-4c5f-83aa-fa782a228a9b",
       "techniques": []
+    },
+    "2fc2870e-4595-4639-950a-590b19787216/mcp-tools": {
+      "context": "store-schema-definition",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:10:45.912Z",
+      "worker": "349072b0-0c17-46a3-b5c7-151096ecb8d8",
+      "techniques": []
+    },
+    "f715b154-0057-44d0-bb0a-80f4caee36ba/mcp-tools": {
+      "context": "firestore-core-dataplane",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:10:45.912Z",
+      "worker": "349072b0-0c17-46a3-b5c7-151096ecb8d8",
+      "techniques": []
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/mcp-tools": {
+      "context": "gateway-proxy",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:10:45.912Z",
+      "worker": "349072b0-0c17-46a3-b5c7-151096ecb8d8",
+      "techniques": []
     }
   }
 }
