@@ -1,0 +1,186 @@
+{
+ "schema": "conform-run/1",
+ "worker": "36473038-c487-4ba6-8ff6-1bb55b1b608e",
+ "subject": "test-harness",
+ "evaluatedAt": "2026-11-03T22:36:27.658808+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-integration-tests",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/tests_ingest.rs:36 Every integration test calls the shared setup(), which opens a fresh in-memory SQLite and runs the full schema::apply plan for that one test. No template is built once and copied, and neither the build cost nor the copy cost is measured, so setup cost grows linearly with the number of tests.",
+   "techniques": [
+    {
+     "technique": "fixture-economics",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_ingest.rs:36 Rebuilds the schema per test instead of building a template once and copying it. The build is in-memory, so each one is probably milliseconds, but the ratio the technique asks for is never measured."
+    },
+    {
+     "technique": "isolation-lanes",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_ingest.rs:58 The shared fixture builds Alerter, Collective, BillingRegistry, IngestGuard and AuthThrottle from the invoking process environment, so the lane inherits whatever the developer's shell exports. The inheritance ledger says that should be nothing."
+    },
+    {
+     "technique": "assert-the-schedule-not-the-stopwatch",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_auth_throttle.rs:141 The block/decay claim rides a real Instant-based 300 ms tumbling window that starts when the throttle is constructed. Setup plus three calls must finish inside it, so a loaded runner can see the block decay early. tests_ingest.rs:398 in the same context shows the correct pattern: a blocking-pool occupier, not a margin."
+    },
+    {
+     "technique": "unreached-decisions-pin-nothing",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_ingest.rs:465 The name claims the gate bounds latency, but the body only println!s percentiles and asserts nothing. A run where shedding bounds nothing is green under the same name."
+    },
+    {
+     "technique": "negative-control-tests",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_health.rs:10 The pre-fix handler is kept and run against the same severed store, so the old false-green is observed, not remembered."
+    },
+    {
+     "technique": "recorded-interaction-fixtures",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/tests_contribute.rs:72 The remote collective hub is stood up as a loopback stub with trivial canned answers. That falls under the technique's own 'locally hostable / trivial to fake' exclusion."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/score_traces.rs:104 Only the pure policy functions are tested. The runner's interaction boundary has no test at any rung, recorded or hosted: the cycle that fetches settled traces, calls the judge and posts scores (and the same for score_text and run_rubric_benchmark). Defects at the wire, where they concentrate, are therefore invisible to the suite.",
+   "techniques": [
+    {
+     "technique": "recorded-interaction-fixtures",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score_traces.rs:104 The suite takes the 'skip the interaction' option the technique names as bad. There is no recording, hosted API or fake transport. The reqwest client is already injected, so a seam exists but goes unused."
+    },
+    {
+     "technique": "unreached-decisions-pin-nothing",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/score_traces.rs:127 The sampling decision is lifted into the pure should_score unit (line 301) and reused by the I/O loop, so the tested decision is the one that runs."
+    },
+    {
+     "technique": "fixture-economics",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/batch.rs:342 Unit rung uses in-memory builders, the cheapest fixture tier that can witness the claim."
+    },
+    {
+     "technique": "isolation-lanes",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/batch.rs:343 Tests pass budgets explicitly to the pure plan() and never read the LIGHTTRACK_BATCH_* env helpers, so nothing is inherited from the developer's shell."
+    }
+   ]
+  },
+  {
+   "context": "python-sdk",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/python/tests/test_diagnostics.py:89 Diagnostics tests build a real client with the default journal, which is on unless LIGHTTRACK_JOURNAL=0, in the machine-wide %TEMP%/lighttrack-spans. Construction runs recover_unsettled_spans(), so the test can sweep other processes' real breadcrumbs and write its own there. The test also depends on LIGHTTRACK_PROJECT being unset in the invoking shell.",
+   "techniques": [
+    {
+     "technique": "isolation-lanes",
+     "verdict": "deviation",
+     "evidence": "clients/python/tests/test_diagnostics.py:89 Inherits the developer's journal directory and LIGHTTRACK_* env. test_journal.py:54 shows the correct per-test TemporaryDirectory, but it is not used here."
+    },
+    {
+     "technique": "approval-snapshots-with-guarded-update",
+     "verdict": "deviation",
+     "evidence": "clients/python/tests/test_contract.py:87 The record switch is an env var that rewrites pii.py and returns green. There is no pipeline refusal and no integrity test, and one global name also drives the TS and anon suites."
+    },
+    {
+     "technique": "unreached-decisions-pin-nothing",
+     "verdict": "conformant",
+     "evidence": "clients/python/tests/conftest.py:20 Closes the 'older copy on the search path' case explicitly, so pytest tests the working tree rather than a site-packages install."
+    },
+    {
+     "technique": "out-of-graph-artifacts",
+     "verdict": "conformant",
+     "evidence": "clients/python/tests/test_contract.py:16 The out-of-graph pip package is gated by building and installing the wheel, then running the suite against it."
+    },
+    {
+     "technique": "assert-the-schedule-not-the-stopwatch",
+     "verdict": "conformant",
+     "evidence": "clients/python/tests/test_journal.py:175 Orphan age is set by backdating the fixture's own mtime, not by sleeping past the threshold."
+    },
+    {
+     "technique": "fixture-economics",
+     "verdict": "conformant",
+     "evidence": "clients/python/tests/test_instrument.py:30 The fake client uses the cheapest fixture for linkage claims and disables the file-writing journal."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "test-harness",
+   "context": "judge-and-scoring",
+   "reason": "evidence leans on judge/tests.rs, which is not a tracked file"
+  },
+  {
+   "subject": "test-harness",
+   "context": "evaluation-scoring-types",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-03T22:36:27.658808+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "assert-the-schedule-not-the-stopwatch",
+    "fixture-economics",
+    "isolation-lanes",
+    "negative-control-tests",
+    "recorded-interaction-fixtures",
+    "unreached-decisions-pin-nothing"
+   ],
+   "deviations": 1,
+   "context": "api-integration-tests",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T22:36:27.658808+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "fixture-economics",
+    "isolation-lanes",
+    "recorded-interaction-fixtures",
+    "unreached-decisions-pin-nothing"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-03T22:36:27.658808+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "approval-snapshots-with-guarded-update",
+    "assert-the-schedule-not-the-stopwatch",
+    "fixture-economics",
+    "isolation-lanes",
+    "out-of-graph-artifacts",
+    "unreached-decisions-pin-nothing"
+   ],
+   "deviations": 1,
+   "context": "python-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -932,9 +932,10 @@
           "changedAt": "2026-10-23",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/api/src/tests_ingest.rs:36 Integration test setup repeatedly applies full SQLite schema migrations from scratch on every test case instead of copying a prepared template, incurring substantial migration overhead and violating build-once-copy-per-test fixture economics.",
-          "evaluatedAt": "2026-10-12",
-          "stale": true
+          "evidence": "crates/api/src/tests_ingest.rs:36 Every integration test calls the shared setup(), which opens a fresh in-memory SQLite and runs the full schema::apply plan for that one test. No template is built once and copied, and neither the build cost nor the copy cost is measured, so setup cost grows linearly with the number of tests.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "mcp-tools",
@@ -5749,7 +5750,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/tests/test_diagnostics.py:89 Diagnostics tests build a real client with the default journal, which is on unless LIGHTTRACK_JOURNAL=0, in the machine-wide %TEMP%/lighttrack-spans. Construction runs recover_unsettled_spans(), so the test can sweep other processes' real breadcrumbs and write its own there. The test also depends on LIGHTTRACK_PROJECT being unset in the invoking shell.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "agent-memory",
@@ -6390,7 +6395,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:104 Only the pure policy functions are tested. The runner's interaction boundary has no test at any rung, recorded or hosted: the cycle that fetches settled traces, calls the judge and posts scores (and the same for score_text and run_rubric_benchmark). Defects at the wire, where they concentrate, are therefore invisible to the suite.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "cross-provider-benchmark-operations",
