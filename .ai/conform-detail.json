@@ -1458,54 +1458,64 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T00:45:25.776Z",
-      "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:47:30.445Z",
+      "worker": "5b80f3db-1219-4ad9-8aa4-712ed61d83f6",
       "techniques": [
         {
           "technique": "entitlement-exhaustion-is-not-ill-health",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/compare.rs:183 Typed cause is lost before the breaker sees it. Searched runner, core and render for entitlement, exhaust, retry-after, plan and allowance terms and found no exhaustion class."
-        },
-        {
-          "technique": "determinism-stamping",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/provenance.rs:200 merge_details lets an unrecorded candidate stamp fold to its recorded neighbour instead of voiding the claim, and it maps any non-exact pair, including sampled+sampled, to best-effort. Latent: every current detail builder stamps Some. compare.rs does stamp generation and judging separately."
+          "evidence": "crates/runner/src/compare.rs:273 Cause is stringified and then collapsed to `generation_failed = true` (line 274) feeding `record(&self, ti, generation_failed: bool)` (line 183). There is no plan-reached flag on targets and no exhausted/ambiguous class."
         },
         {
           "technique": "budget-preflight-and-ceiling",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/compare.rs:499 Pre-flight estimate names unpriced models as a lower bound, aborts with the exact value to pass, enforces an atomic micro-dollar ceiling at case boundaries, and marks the run partial."
+          "evidence": "crates/runner/src/budget.rs:44 The pre-flight prints a lower bound when models are unpriced. The live ceiling is an atomic micro-dollar counter checked at case boundaries, and halt_status marks the run partial."
         },
         {
-          "technique": "async-run-queue-with-cancel",
+          "technique": "determinism-stamping",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/compare.rs:241 Cancel is observed at a case boundary, never mid-call, and live progress ticks per cell."
-        },
-        {
-          "technique": "dataset-sampling-anonymize-freeze",
-          "verdict": "conformant",
-          "evidence": "crates/runner/src/bench.rs:165 Records dataset_frozen and dataset_version at run time and warns, without refusing, when the dataset is unfrozen."
-        },
-        {
-          "technique": "target-matrix-runs",
-          "verdict": "conformant",
-          "evidence": "crates/runner/src/compare.rs:648 Mechanical judge/target family check, warned and recorded on the run."
+          "evidence": "crates/runner/src/compare.rs:1040 Both halves are stamped and the headline is the weaker of them. Multi-draw runs are stamped Sampled, and the stamp folds weakest-first."
         },
         {
           "technique": "sampling-knobs-are-axes-not-strings",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/targets.rs:73 Effort travels from the target and is split at the provider boundary."
+          "evidence": "crates/runner/src/targets.rs:73 Effort is a typed field on BenchTarget, and display_label carries it (e.g. openai/gpt-4o@low)."
         },
         {
-          "technique": "cheapest-sufficient-configuration",
+          "technique": "target-matrix-runs",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/compare.rs:1183 A partial run, including a health-filtered one, refuses the recommendation."
+          "evidence": "crates/runner/src/compare.rs:648 Judge/target family overlap is checked mechanically per target and recorded as a named warning. p50/p95 latency and cost are measured on the same calls."
+        },
+        {
+          "technique": "dataset-sampling-anonymize-freeze",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/bench.rs:167 dataset_frozen and dataset_version are pinned into the run at run time, and an unfrozen set warns rather than refusing."
         },
         {
           "technique": "graded-case-difficulty",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/compare.rs:1051 Per-tier report beside the aggregate."
+          "evidence": "crates/runner/src/compare.rs:599 Per-tier means and the discrimination annotation are persisted on the run report through annotate_tiers. No per-tier recommendation is made."
+        },
+        {
+          "technique": "cheapest-sufficient-configuration",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/compare.rs:1158 Frontier plus recommendation. The test a_halted_run_renders_its_table_and_refuses_to_recommend shows a partial run refuses to recommend."
+        },
+        {
+          "technique": "async-run-queue-with-cancel",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/compare.rs:241 Cancel is observed at a case boundary, never mid-call. halt_status reports 'cancelled'. The queue itself lives in serve_job/the stores, outside this context's files."
+        },
+        {
+          "technique": "handicap-disclosure-in-the-result-row",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/targets.rs:98 Targets can declare a structured-output schema, but compare.rs never reads GenOutcome.schema (grep 'schema' in compare.rs: 0 hits). A shed contract (prose fallback) never reaches the result row."
+        },
+        {
+          "technique": "self-hosted-residency-is-part-of-the-target",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/compare.rs:1035 A local runtime behind LIGHTTRACK_OPENAI_BASE is identified (Ollama/vLLM), but no loaded context window or resident fraction is declared or read back into the row."
         },
         {
           "technique": "axes-and-caveats-live-at-the-surface",
@@ -1517,12 +1527,6 @@
           "technique": "failure-clustering-recommendations",
           "verdict": "deviation",
           "evidence": "crates/runner/src/compare.rs:999 Compare reports dimension means and case results without constructing auditable failing-case clusters by dimension and pattern.",
-          "carriedFrom": "2026-10-13"
-        },
-        {
-          "technique": "handicap-disclosure-in-the-result-row",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/compare.rs:777 The complete case-result constructor stores spend facts without a typed concession, although generation can shed schema enforcement or fold system instructions.",
           "carriedFrom": "2026-10-13"
         }
       ],
@@ -1540,6 +1544,13 @@
           "evaluatedAt": "2026-10-13T02:05:21.316Z",
           "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
           "reason": "replaced by 8f1d66a3-8c39-4dde-8176-c47843a377d3"
+        },
+        {
+          "state": "deviation",
+          "evidence": "crates/runner/src/compare.rs:183 Each cell's generation error is reduced to a string plus a boolean before the per-target breaker sees it, so an exhausted subscription seat (claude -p / Codex targets) cannot be told apart from provider ill health and shows up as health_filtered.",
+          "evaluatedAt": "2026-10-24T00:45:25.776Z",
+          "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+          "reason": "replaced by 5b80f3db-1219-4ad9-8aa4-712ed61d83f6"
         }
       ]
     },
@@ -8968,6 +8979,73 @@
           "technique": "policy-projection",
           "verdict": "conformant",
           "evidence": "clients/python/tests/test_contract.py:51 The SDK's PII table is generated from one server-side enumeration and the test fails on drift. It is not hand-maintained per language."
+        }
+      ]
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/cross-provider-benchmark-operations": {
+      "context": "provider-generation",
+      "subject": "cross-provider-benchmark-operations",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:47:30.445Z",
+      "worker": "5b80f3db-1219-4ad9-8aa4-712ed61d83f6",
+      "techniques": [
+        {
+          "technique": "handicap-disclosure-in-the-result-row",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:304 The deterministic path (used for pinned candidate generation and the judge) sheds the schema with only an eprintln. The typed SchemaEnforcement::Shed is never set on this branch."
+        },
+        {
+          "technique": "sampling-knobs-are-axes-not-strings",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/providers.rs:335 The suffix is split once at the boundary every adapter crosses. Adapters get a typed Effort, Gemini refuses by name (gemini.rs:59), and the per-request timeout scales with level (providers.rs:57)."
+        },
+        {
+          "technique": "determinism-stamping",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/providers.rs:459 The CLI path is stamped best-effort. OpenAI/Gemini are stamped Exact only with temperature 0 plus a seed, and the unpinned fallback degrades to BestEffort."
+        },
+        {
+          "technique": "entitlement-exhaustion-is-not-ill-health",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/retry.rs:111 The engine applies the stated-wait discriminator and returns a typed terminal error carrying asked/remaining seconds. Preserving it downstream is the runner's failure, not this context's."
+        },
+        {
+          "technique": "self-hosted-residency-is-part-of-the-target",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/endpoint_probe.rs:5 Local runtimes are a supported target, but the probe records identity only. A search for resident/offload/num_ctx/size_vram across engine, runner and core found nothing."
+        }
+      ]
+    },
+    "3ac06f6e-2d1a-4285-8ea3-1ce4a5f0bdca/cross-provider-benchmark-operations": {
+      "context": "collective-leaderboard",
+      "subject": "cross-provider-benchmark-operations",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T23:47:30.445Z",
+      "worker": "5b80f3db-1219-4ad9-8aa4-712ed61d83f6",
+      "techniques": [
+        {
+          "technique": "budget-preflight-and-ceiling",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/collective/scorecard.rs:25 There is no status filter in run_stat or gather_run_stats (digest.rs:96), and the leaderboard has no partial banner."
+        },
+        {
+          "technique": "determinism-stamping",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/collective/fold.rs:155 Cross-instance merge folds pessimistically. The hub clamps to the closed vocabulary (sanitize.rs:121)."
+        },
+        {
+          "technique": "dataset-sampling-anonymize-freeze",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/collective/scorecard.rs:59 The frozen flag and version travel into the digest, and the leaderboard can filter on frozen coverage."
+        },
+        {
+          "technique": "target-matrix-runs",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/collective/scorecard.rs:51 Quality, pass rate, cost per case and p50/p95 are carried per row."
         }
       ]
     }

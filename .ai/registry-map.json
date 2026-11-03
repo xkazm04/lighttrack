@@ -2017,7 +2017,11 @@
           "revision": 13,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/collective/scorecard.rs:25 run_stat admits any run with a mean, pass rate and cases, and never consults run.status. Budget-halted 'partial' and 'cancelled' compare runs (compare.rs:1075 writes that status) therefore join federated buckets as if complete, so partial is not contagious into the leaderboard.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:a6d9e74af45916cc",
+          "evaluatedRevision": 13
         }
       ],
       "governance": "governed"
@@ -5686,7 +5690,11 @@
           "revision": 13,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/providers.rs:304 When a provider rejects the pinned request, generate_deterministic drops the caller's schema and retries. Because the retry has schema None, schema_state stamps it NotRequested rather than Shed (only generate_chat stamps Shed at line 256), so a target's structured-output case hand-lowered into prose is indistinguishable from one that never asked for a schema.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:a6d9e74af45916cc",
+          "evaluatedRevision": 13
         },
         {
           "subject": "test-input-generation",
@@ -6236,14 +6244,13 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/runner/src/compare.rs:183 Each cell's generation error is reduced to a string plus a boolean before the per-target breaker sees it, so an exhausted subscription seat (claude -p / Codex targets) cannot be told apart from provider ill health and shows up as health_filtered.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:609da9e2f3c21869",
-          "evaluatedRevision": 12,
+          "evidence": "crates/runner/src/compare.rs:273 The typed EngineError from generation (which can be OverBudgetWait carrying the provider's stated wait) is turned into a string, and only a boolean reaches TargetHealth::record. An exhausted claude -p or Codex seat therefore cannot be told apart from provider ill health and gets reported as health_filtered.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:a6d9e74af45916cc",
+          "evaluatedRevision": 13,
           "source": "conform",
           "adoptedFrom": "662e62fb-df6c-45c9-9f3d-cdc98cb44cf8",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "fleet-orchestration",
