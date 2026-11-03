@@ -3201,7 +3201,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/tests/render.rs:17 Whole Markdown tables are verified by a handful of substring probes plus a println to 'eyeball' the output. That is a partial oracle that stays green when an unasserted column, row, alignment or total breaks.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "eval-harness",
@@ -3813,7 +3817,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/tests/conformance.rs:3 The backend's only integration test returns success when LIGHTTRACK_TEST_FIRESTORE is unset, so 'passed' and 'never ran' are reported identically. The 'required' CI job has no floor that would turn a lost env var into red.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "judge-calibration-and-drift",
@@ -7895,7 +7903,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/contract.test.ts:83 The generated-pii.ts snapshot's record switch is an environment variable, and in record mode the test writes the file and returns green. No test asserts the switch is off, so a runner with the variable set certifies nothing while reporting a pass.",
+          "evaluatedAt": "2026-11-03",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "agent-memory",

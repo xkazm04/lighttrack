@@ -7391,32 +7391,34 @@
       "context": "evaluation-rendering",
       "subject": "test-harness",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T17:27:29.524Z",
+      "worker": "14299daf-4cee-487f-9e8a-68eb3947ad4a",
       "techniques": [
         {
           "technique": "approval-snapshots-with-guarded-update",
           "verdict": "deviation",
-          "evidence": "crates/render/tests/render.rs:1 The output is a rich structure with more fields than anyone asserts by hand, yet there is no recorded oracle: a partial substring check plus eyeballing."
+          "evidence": "crates/render/tests/render.rs:17 The output is a rich rendered document. The decision rule says to record and review the recording, not hand-pick fields. Line 1 says to run with --nocapture to eyeball, which is approval without a recording."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/effort_curve.rs:74 Unit tests use in-memory JSON builders, the cheapest fixture tier that can witness a pure renderer."
         },
         {
           "technique": "assert-through-the-reader",
           "verdict": "deviation",
-          "evidence": "crates/render/tests/render.rs:122 GFM is emitted for foreign Markdown renderers in the CLI and MCP clients, but no test parses it. A substring like this is shared by well-formed and broken tables."
+          "evidence": "crates/render/tests/render.rs:122 GFM is emitted for foreign Markdown renderers in the CLI and MCP clients, but no test parses it. A substring like this is shared by well-formed and broken tables.",
+          "carriedFrom": "2026-10-24"
         },
         {
           "technique": "unreached-decisions-pin-nothing",
           "verdict": "conformant",
-          "evidence": "crates/render/tests/render.rs:168 The compare test separates the two producers of the headline (sample fact versus tested claim) and checks that the untested path never crowns a winner (line 192)."
+          "evidence": "crates/render/tests/render.rs:168 The compare test separates the two producers of the headline (sample fact versus tested claim) and checks that the untested path never crowns a winner (line 192).",
+          "carriedFrom": "2026-10-24"
         }
-      ],
-      "withdrawn": {
-        "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
-        "state": "deviation",
-        "at": "2026-10-24T01:13:26.327633+00:00",
-        "reason": "reviewer (sonnet): The claim that a broken column, row or escape still passes is contradicted by structural unit tests in crates/render/src/md.rs (a_cell_cannot_break_out_of_its_column_or_row asserts exact line and pipe counts, table_has_header_separator_and_rows) and the 17 tests in compare.rs, so the verdict reads r"
-      }
+      ]
     },
     "691eec3b-d884-4c85-9aa5-fa419b6b8457/test-harness": {
       "context": "store-conformance-governance",
@@ -8521,6 +8523,58 @@
           "technique": "isolation-lanes",
           "verdict": "conformant",
           "evidence": "crates/runner/src/serve.rs:168 The env-reading test takes a process-wide lock and restores on Drop or unwind, so it neither inherits nor leaks provider keys."
+        }
+      ]
+    },
+    "3e637b68-74b5-4382-9828-f785f4ed1323/test-harness": {
+      "context": "typescript-sdk",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T17:27:29.524Z",
+      "worker": "14299daf-4cee-487f-9e8a-68eb3947ad4a",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/contract.test.ts:83 This is the runtime-flag/env-var record-switch shape the technique calls invisible to the pipeline. There is no source constant and no guard test."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/instrument.test.ts:25 A bare client inherits LIGHTTRACK_URL, KEY, PROJECT and ENFORCE from the shell, and its journal defaults to the machine-wide $TMP/lighttrack-spans (journal.ts:89-93), the same directory a real client recovers from. journal.test.ts does isolate, using mkdtemp per test."
+        },
+        {
+          "technique": "recorded-interaction-fixtures",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/contract.test.ts:105 The extractors fixture says it holds 'Real captured provider response shapes' but carries no capture date or API revision per case. No live lane re-certifies them, so playback keeps certifying the shape as of whenever it was captured."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/journal.test.ts:56 A fixed 25 ms timer stands in for the journal's async fs-load and write before age() backdates the files. Under load the write can land after the backdating, so the test's verdict depends on machine speed. This is the timer-as-synchronisation flake shape rather than a literal overlap/cap claim."
+        }
+      ]
+    },
+    "32c31d6e-f9fb-4806-855a-b6056d920f34/test-harness": {
+      "context": "firestore-eval-collective",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-03",
+      "evaluatedTs": "2026-11-03T17:27:29.524Z",
+      "worker": "14299daf-4cee-487f-9e8a-68eb3947ad4a",
+      "techniques": [
+        {
+          "technique": "suite-partitioning",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/tests/conformance.rs:3 The report cannot distinguish 'everything passed' from 'the tier never ran'. The skip is an eprintln plus return inside a passing #[test]."
+        },
+        {
+          "technique": "configuration-axes-cross-the-ladder",
+          "verdict": "conformant",
+          "evidence": "crates/store-firestore/tests/conformance.rs:24 The same backend-agnostic, capability-driven suite runs on this backend as on SQLite and Postgres, so the backend is an axis crossed by one suite rather than a separate ad-hoc test set."
         }
       ]
     }
