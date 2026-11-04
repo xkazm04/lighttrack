@@ -885,7 +885,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "priorNotApplicable": 3,
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:30 The endpoint table is a compile-time constant catalog of the host's own HTTP routes, held in bijection with build_router. No contribution can mount a route and there is no agent runtime pipeline. A search of crates/contract/src/endpoints for plugin, subagent, mutator and assembly found nothing; `checkpoint` and `hook` appear only as dataset-freeze and webhook prose.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "quality-gates",
@@ -2263,8 +2267,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "deviation",
+          "priorNotApplicable": 3,
+          "evidence": "crates/core/src/relay.rs:28 A relay task whose device died mid-run is recorded through a distinguishing prefix string in `error`, not a first-class status. Once its reclaim budget runs out it ends as `dead`, which the vocabulary defines as terminal failure. The indeterminate outcome therefore lives in prose that every consumer must re-parse, and an unknown-outcome agent action is filed as a failure.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         }
       ],
       "governance": "governed"

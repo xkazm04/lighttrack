@@ -10343,22 +10343,17 @@
       "context": "api-endpoint-table",
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
-      "state": "unknown",
+      "state": "not-applicable",
       "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T05:09:41.034Z",
+      "evaluatedTs": "2026-11-04T22:10:09.925Z",
+      "worker": "7a1ead78-817c-4c9e-8891-13f4c67ad0d9",
       "techniques": [
         {
           "technique": "host-routes-win",
           "verdict": "not-applicable",
-          "evidence": "crates/contract/src/endpoints/mod.rs:4 Every route is host-declared and checked by a bijection test against build_router. No contribution can mount handlers."
+          "evidence": "crates/contract/src/endpoints/mod.rs:30 All routes are host-owned compile-time constants; the API router has no contributed-router merge, so there is no mount order to defend."
         }
-      ],
-      "withdrawn": {
-        "worker": "7a5a1c85-9eeb-42b3-82b8-9e253ec9eace",
-        "state": "not-applicable",
-        "at": "2026-11-04T05:10:05.851128+00:00",
-        "reason": "reviewer (sonnet): The anchor mod.rs:4 is a doc comment about row ordering, not proof that no extension or contributed-route surface exists; the bijection test it relies on is not in the context files, and the greps ('plugin', 'subagent', 'mutator', 'allowedTools') are weak terms for this subject."
-      }
+      ]
     },
     "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/agent-runtime-assembly": {
       "context": "sqlite-platform-backend",
@@ -10480,6 +10475,32 @@
       "evaluatedTs": "2026-11-04T05:42:22.315Z",
       "worker": "4d197776-bf8b-4a93-9dd1-166639c0f650",
       "techniques": []
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/agent-runtime-assembly": {
+      "context": "core-observability-types",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T22:10:09.925Z",
+      "worker": "7a1ead78-817c-4c9e-8891-13f4c67ad0d9",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/relay.rs:28 This is the named failure mode: a distinguishing string inside the error field, with no indeterminate value in RelayStatus. Line 47 defines Dead as 'Terminal failure — the retry budget or the device-death budget is exhausted'. Reclaim also re-runs a possibly side-effecting action, which assumes it is idempotent. The separate stale_reclaims counter is a real, partial mitigation."
+        },
+        {
+          "technique": "operator-tier-code-loading",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/relay.rs:6 The service-writable tier (a cloud enqueue) can name only an action type plus parameters. Prompts and allowed tools come from the device's local, operator-held action library."
+        },
+        {
+          "technique": "bounded-projection-of-external-work",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/relay.rs:136 A per-holder lease fence discards a late result from a superseded holder. Cancelling sits outside the leasable set, so post-cancel delivery is withheld (line 49)."
+        }
+      ]
     }
   }
 }

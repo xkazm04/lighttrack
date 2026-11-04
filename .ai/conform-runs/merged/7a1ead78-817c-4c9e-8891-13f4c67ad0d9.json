@@ -1,0 +1,93 @@
+{
+ "schema": "conform-run/1",
+ "worker": "7a1ead78-817c-4c9e-8891-13f4c67ad0d9",
+ "subject": "agent-runtime-assembly",
+ "evaluatedAt": "2026-11-04T22:10:09.925901+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-endpoint-table",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/contract/src/endpoints/mod.rs:30 The endpoint table is a compile-time constant catalog of the host's own HTTP routes, held in bijection with build_router. No contribution can mount a route and there is no agent runtime pipeline. A search of crates/contract/src/endpoints for plugin, subagent, mutator and assembly found nothing; `checkpoint` and `hook` appear only as dataset-freeze and webhook prose.",
+   "techniques": [
+    {
+     "technique": "host-routes-win",
+     "verdict": "not-applicable",
+     "evidence": "crates/contract/src/endpoints/mod.rs:30 All routes are host-owned compile-time constants; the API router has no contributed-router merge, so there is no mount order to defend."
+    }
+   ],
+   "absenceTerms": [
+    "plugin",
+    "subagent",
+    "mutator",
+    "assembly"
+   ]
+  },
+  {
+   "context": "core-observability-types",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/relay.rs:28 A relay task whose device died mid-run is recorded through a distinguishing prefix string in `error`, not a first-class status. Once its reclaim budget runs out it ends as `dead`, which the vocabulary defines as terminal failure. The indeterminate outcome therefore lives in prose that every consumer must re-parse, and an unknown-outcome agent action is filed as a failure.",
+   "techniques": [
+    {
+     "technique": "indeterminate-closure-on-interruption",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/relay.rs:28 This is the named failure mode: a distinguishing string inside the error field, with no indeterminate value in RelayStatus. Line 47 defines Dead as 'Terminal failure \u2014 the retry budget or the device-death budget is exhausted'. Reclaim also re-runs a possibly side-effecting action, which assumes it is idempotent. The separate stale_reclaims counter is a real, partial mitigation."
+    },
+    {
+     "technique": "operator-tier-code-loading",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/relay.rs:6 The service-writable tier (a cloud enqueue) can name only an action type plus parameters. Prompts and allowed tools come from the device's local, operator-held action library."
+    },
+    {
+     "technique": "bounded-projection-of-external-work",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/relay.rs:136 A per-holder lease fence discards a late result from a superseded holder. Cancelling sits outside the leasable set, so post-cancel delivery is withheld (line 49)."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-runtime-assembly",
+   "context": "claude-invocation-and-execution",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T22:10:09.925901+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "host-routes-win"
+   ],
+   "deviations": 0,
+   "context": "api-endpoint-table",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T22:10:09.925901+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "bounded-projection-of-external-work",
+    "indeterminate-closure-on-interruption",
+    "operator-tier-code-loading"
+   ],
+   "deviations": 1,
+   "context": "core-observability-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
