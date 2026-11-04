@@ -1,0 +1,151 @@
+{
+ "schema": "conform-run/1",
+ "worker": "2f11fd8f-9572-4ad0-8ec9-47682e9f4580",
+ "subject": "breach-alerting-and-attribution",
+ "evaluatedAt": "2026-11-04T04:51:22.255237+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "sqlite-governance-backend",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/store/src/sqlite/alerts.rs:40 The SQLite backend holds the alert cooldown gate as one transaction keyed on the full dedup_key, with the timer on the alert's server-stamped fired_at; it also records every per-channel delivery outcome, stores the current and previous channel secret, and buckets forecast series on server arrival time.",
+   "techniques": [
+    {
+     "technique": "scoped-dedup-keys",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/alerts.rs:40 Per-key cooldown inside one transaction (no double alert across replicas), timed on fired_at, not on client event time. The key itself is built in crates/api/src/alerts/mod.rs:228."
+    },
+    {
+     "technique": "off-request-path-delivery",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/alerts.rs:79 Each channel's outcome is appended to the ledger with read-modify-write in a transaction, so a failed delivery is a countable record (the non-silence clause). It is called from the spawned fire task (api ledger.rs)."
+    },
+    {
+     "technique": "notification-channel-security",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/alert_channels.rs:14 Persists the derived signing key plus a previous key for the rotation overlap window. Signing is opt-in and prev_secret_hash is never populated, but both are API-side gaps, not this store's."
+    },
+    {
+     "technique": "pre-breach-forecasting",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/forecast.rs:25 The daily series behind the level+slope projection buckets on server arrival time, so a backdating client cannot reshape the forecast. daily_cost_by_dimension feeds the per-customer margin crossover."
+    }
+   ]
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/store-pg/src/alerts.rs:37 On the multi-replica production backend, the cooldown gate takes an advisory lock scoped to one dedup key, so two Cloud Run instances page once, not twice, and the rest of the alert surface (delivery records, rotation-ready secrets, the windowed rollups attribution reads) is implemented rather than defaulted.",
+   "techniques": [
+    {
+     "technique": "scoped-dedup-keys",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/alerts.rs:37 Serialises only alerts that share a key, then runs a cooldown lookback on dedup_key and fired_at. Mirrors SQLite row for row."
+    },
+    {
+     "technique": "off-request-path-delivery",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/alerts.rs:95 Delivery outcomes are appended under a row lock so no delivery record is lost. Failures stay visible, not silent."
+    },
+    {
+     "technique": "notification-channel-security",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/alert_channels.rs:26 Stores the previous derived key next to the current one for verification overlap during rotation. The opt-in signing policy is the api's (recorded deviation at crates/api/src/alerts/routing.rs:155)."
+    },
+    {
+     "technique": "top-contributor-attribution",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/lib.rs:230 Postgres implements the windowed cost rollup (and usecase_costs at :241) that attribution::fetch reads, so breach attribution works on this backend from existing rollups and does not scan raw events."
+    }
+   ]
+  },
+  {
+   "context": "cli-infrastructure",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/cli/src/cli/alerts.rs:72 `lt alerts channels set` makes webhook signing an opt-in `--signed` flag that defaults to false, so a channel configured the default way delivers unsigned payloads, and its receiver cannot tell a real breach alert from a forged POST.",
+   "techniques": [
+    {
+     "technique": "notification-channel-security",
+     "verdict": "deviation",
+     "evidence": "crates/cli/src/cli/alerts.rs:72 A bare clap bool flag, so signing is off unless requested. The standard says every delivered payload is signed with a per-channel secret issued at configuration. This CLI default mirrors the recorded api deviation (routing.rs:155)."
+    },
+    {
+     "technique": "off-request-path-delivery",
+     "verdict": "conformant",
+     "evidence": "crates/cli/src/cli/alerts.rs:82 The synchronous test-this-channel verb is the technique's named exception, where the caller wants to wait for the sink's answer. Breach delivery itself is not on any CLI path."
+    },
+    {
+     "technique": "identity-scope-attribution-refusal",
+     "verdict": "conformant",
+     "evidence": "crates/cli/src/limits.rs:198 Exposes the authenticated per-identity surface (/v1/limits/usage?by=api_key|customer, scoped by the caller's key) that an identity-scoped refusal must point to, so the forwarding address exists."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "breach-alerting-and-attribution",
+   "context": "firestore-eval-collective",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T04:51:22.255237+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "notification-channel-security",
+    "off-request-path-delivery",
+    "pre-breach-forecasting",
+    "scoped-dedup-keys"
+   ],
+   "deviations": 0,
+   "context": "sqlite-governance-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:51:22.255237+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "notification-channel-security",
+    "off-request-path-delivery",
+    "scoped-dedup-keys",
+    "top-contributor-attribution"
+   ],
+   "deviations": 0,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:51:22.255237+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "identity-scope-attribution-refusal",
+    "notification-channel-security",
+    "off-request-path-delivery"
+   ],
+   "deviations": 1,
+   "context": "cli-infrastructure",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
