@@ -2101,13 +2101,12 @@
           "revision": 8,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "conformant",
-          "evidence": "crates/core/src/trace.rs:297 The core observability module derives traces purely on read from raw events as an I/O-free fold, enforcing unified shape rules, span caps, and unpriced span counts without materializing a traces table.",
-          "evaluatedAt": "2026-10-15",
-          "evaluatedAgainst": "sha256-b2:441741a78f8712b4",
-          "evaluatedRevision": 7,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "deviation",
+          "evidence": "crates/core/src/trace.rs:260 The list-view type TraceSummary carries a cost_usd sum with no unpriced-span count beside it, so a list row with unpriced spans looks like a full total; only the detail TraceTotals (line 220) discloses unpriced_spans, and the technique requires the count at every aggregation level, not only on the detail view.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:3db1001b079944c5",
+          "evaluatedRevision": 8,
+          "revisionsBehind": 1
         },
         {
           "subject": "multi-provider-event-normalization",
@@ -5046,12 +5045,11 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/store-pg/src/traces.rs:144 Keyset pagination orders descending on ended (latest event time), which moves forward as late spans arrive and silently skips active traces.",
-          "evaluatedAt": "2026-10-15",
-          "evaluatedAgainst": "sha256-b2:441741a78f8712b4",
-          "evaluatedRevision": 7,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store-pg/src/traces.rs:130 The trace keyset pages newest-first on MAX(ts), the trace's latest event time. Every late span moves that key later, carrying the trace from behind the cursor to in front of it, so it is silently skipped. The technique names this exact failure.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:3db1001b079944c5",
+          "evaluatedRevision": 8,
+          "revisionsBehind": 1
         },
         {
           "subject": "multi-provider-event-normalization",

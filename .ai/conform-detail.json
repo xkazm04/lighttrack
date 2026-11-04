@@ -5447,35 +5447,44 @@
       "context": "core-observability-types",
       "subject": "trace-rollup-and-attribution",
       "bundle": "llm-observability",
-      "state": "conformant",
-      "evaluatedAt": "2026-10-15",
-      "evaluatedTs": "2026-10-15T21:40:03.206Z",
-      "worker": "6ce78863-629b-4ed5-ba2a-4a45af87aadb",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:02:16.287Z",
+      "worker": "e6ccd1fc-9938-48a3-9268-43838692a8e7",
       "techniques": [
         {
           "technique": "derived-trace-rollup",
           "verdict": "conformant",
-          "evidence": "crates/core/src/trace.rs:302 Oldest-first sort drives deterministic parentage, model ordering, and tree assembly."
+          "evidence": "crates/core/src/trace.rs:320 Pure fold with no I/O: sorts oldest-first, takes identity from the events, sums totals in one pass with total_latency_ms kept separate, and builds the forest. Dangling parents and self-parents become roots, cycles are promoted to roots, duplicate span ids are flagged and the first one owns the id."
         },
         {
           "technique": "single-shape-rule",
           "verdict": "conformant",
-          "evidence": "crates/core/src/trace.rs:41 Single shared shape computes duration from first start to last finish and status across all views."
+          "evidence": "crates/core/src/trace.rs:64 Duration (first start to last finish, both truncated to ms before subtracting) and status (any non-success span = error) are stated once and used by both list and detail."
         },
         {
           "technique": "span-cap-truncation-signal",
           "verdict": "conformant",
-          "evidence": "crates/core/src/trace.rs:269 Exposes spans_total, spans_logged, and spans_truncated on Trace so clipped reads self-describe."
-        },
-        {
-          "technique": "unpriced-span-accounting",
-          "verdict": "conformant",
-          "evidence": "crates/core/src/trace.rs:197 Carries unpriced span count alongside cost_usd in TraceTotals when models lack price entries."
+          "evidence": "crates/core/src/trace.rs:300 spans_total, spans_logged and spans_truncated are always present. TraceCoverage relies on oldest-kept retention so a clipped trace has a stable root fingerprint."
         },
         {
           "technique": "tenant-scoped-trace-ids",
           "verdict": "conformant",
-          "evidence": "crates/core/src/trace.rs:29 Normalizes 16- and 32-character hex trace/span identifiers to lowercase while preserving opaque IDs verbatim."
+          "evidence": "crates/core/src/trace.rs:52 One shared canonicalizer (delegates to TraceRef): lowercases W3C-length hex ids and keeps other ids verbatim. Query scoping happens in the stores, not here."
+        },
+        {
+          "technique": "unpriced-span-accounting",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/trace.rs:260 TraceTotals.unpriced_spans (line 220) is correct for the detail view, but TraceSummary has no unpriced count, so the list-level aggregate hides the unmeasured spans."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "conformant",
+          "evidence": "crates/core/src/trace.rs:297 The core observability module derives traces purely on read from raw events as an I/O-free fold, enforcing unified shape rules, span caps, and unpriced span counts without materializing a traces table.",
+          "evaluatedAt": "2026-10-15T21:40:03.206Z",
+          "worker": "6ce78863-629b-4ed5-ba2a-4a45af87aadb",
+          "reason": "replaced by e6ccd1fc-9938-48a3-9268-43838692a8e7"
         }
       ]
     },
@@ -5484,39 +5493,48 @@
       "subject": "trace-rollup-and-attribution",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-15",
-      "evaluatedTs": "2026-10-15T21:40:03.206Z",
-      "worker": "6ce78863-629b-4ed5-ba2a-4a45af87aadb",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:02:16.287Z",
+      "worker": "e6ccd1fc-9938-48a3-9268-43838692a8e7",
       "techniques": [
         {
           "technique": "derived-trace-rollup",
           "verdict": "conformant",
-          "evidence": "crates/store-pg/src/traces.rs:254 Queries raw events table ordered by ts ASC on read, maintaining first-seen model order in a single query."
-        },
-        {
-          "technique": "single-shape-rule",
-          "verdict": "conformant",
-          "evidence": "crates/store-pg/src/traces.rs:226 Computes list summary duration and status via TraceShape rather than re-deriving separate arithmetic."
-        },
-        {
-          "technique": "span-cap-truncation-signal",
-          "verdict": "conformant",
-          "evidence": "crates/store-pg/src/traces.rs:283 Fetches max_spans plus one, truncating to oldest spans and querying COUNT(*) for real total on clip."
-        },
-        {
-          "technique": "tenant-scoped-trace-ids",
-          "verdict": "conformant",
-          "evidence": "crates/store-pg/src/traces.rs:262 Filters by project_id in SQL query using idx_events_project_trace, isolating tenant trace IDs."
-        },
-        {
-          "technique": "unpriced-span-accounting",
-          "verdict": "conformant",
-          "evidence": "crates/store-pg/src/events/write.rs:71 Binds nullable cost_usd directly as NULL rather than coercing unpriced spans to 0.00 at insert."
+          "evidence": "crates/store-pg/src/traces.rs:143 The list comes from a GROUP BY trace_id aggregate over events, there is no traces table, and first-seen model order comes from one extra query (attach_models)."
         },
         {
           "technique": "keyset-trace-pagination",
           "verdict": "deviation",
-          "evidence": "crates/store-pg/src/traces.rs:130 Pages on composite cursor (ended, trace_id) descending instead of start time, skipping rows as ended mutates, and omits total count N."
+          "evidence": "crates/store-pg/src/traces.rs:130 Composite cursor and limit+1 has-more check are right, but the ordering key is the mutable latest-activity time, not the start time. TracePage has no cursor-independent total, and a malformed cursor becomes StoreError::Other, which the API maps to 500 internal rather than a client error."
+        },
+        {
+          "technique": "single-shape-rule",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/traces.rs:226 The aggregate only supplies started/finish_ms/errors; duration and status come from the shared TraceShape."
+        },
+        {
+          "technique": "span-cap-truncation-signal",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/traces.rs:264 Keeps the oldest spans, fetches cap+1, and runs COUNT(*) for the true total only when the cap bites."
+        },
+        {
+          "technique": "tenant-scoped-trace-ids",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/traces.rs:262 Project scope is in the query for detail, models and scores; None (unscoped) is for operators only."
+        },
+        {
+          "technique": "unpriced-span-accounting",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:65 The trace summary aggregate sums nullable cost with no COUNT(*) FILTER (WHERE cost_usd IS NULL) beside it. The usage rollup (rollup.rs) does carry unpriced_calls, so the trace list level is the gap."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:144 Keyset pagination orders descending on ended (latest event time), which moves forward as late spans arrive and silently skips active traces.",
+          "evaluatedAt": "2026-10-15T21:40:03.206Z",
+          "worker": "6ce78863-629b-4ed5-ba2a-4a45af87aadb",
+          "reason": "replaced by e6ccd1fc-9938-48a3-9268-43838692a8e7"
         }
       ]
     },
