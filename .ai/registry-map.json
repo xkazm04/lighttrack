@@ -5155,7 +5155,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/events/mod.rs:1 These are the Postgres event, rollup, trace and redaction modules of the store backend. A case-insensitive search of crates/store-pg for the terms below found zero files, so there is no tool server, tool result or tool schema here for the subject to govern.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         }
       ],
       "governance": "governed"
@@ -5375,7 +5379,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/lib.rs:1 This context is a sqlx implementation of the Store trait. A case-insensitive search of crates/store-pg for the terms below found zero files: it exposes no tools, holds no tool catalog and sits behind no tool door, so no mcp-tools technique has a precondition here.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         }
       ],
       "governance": "governed"
@@ -5519,7 +5527,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/anon/Cargo.toml:9 The crate's only runtime dependencies are regex and sha2, and serde_json is a dev-dependency only. A case-insensitive search of crates/anon for the terms below found nothing, so this regex scrubber library has no tool protocol surface.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "codebase-scanning",

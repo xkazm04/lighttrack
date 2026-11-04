@@ -1374,25 +1374,27 @@
       "subject": "mcp-tools",
       "bundle": "software-engineering",
       "state": "unknown",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T01:11:05.566Z",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:21:39.834Z",
       "techniques": [
         {
           "technique": "server-composition",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_capabilities.rs:35 Tests verify Axum router endpoints directly via HTTP request handling and do not test MCP server composition."
+          "evidence": "crates/api/src/tests_capabilities.rs:35 Tests verify Axum router endpoints directly via HTTP request handling and do not test MCP server composition.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "transport-selection",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_capabilities.rs:11 Precondition does not hold as tests use in-memory tower oneshot HTTP rather than stdio or SSE MCP transports."
+          "evidence": "crates/api/src/tests_capabilities.rs:11 Precondition does not hold as tests use in-memory tower oneshot HTTP rather than stdio or SSE MCP transports.",
+          "carriedFrom": "2026-10-13"
         }
       ],
       "withdrawn": {
-        "worker": "12d74f3e-1723-48f6-8457-55e2f4c7a643",
+        "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
         "state": "not-applicable",
-        "at": "2026-10-13T01:11:49.565864+00:00",
-        "reason": "reviewer (sonnet): The evidence says a grep for 'mcp' across the test files found zero matches, but crates/api/src/tests_limits_preview.rs mentions MCP and reads `e.mcp` (line 308) to assert the tool's `read_only` flag, so the not-applicable claim is contradicted."
+        "at": "2026-11-04T03:22:18.065087+00:00",
+        "reason": "reviewer (sonnet): The claim that the mcp hits are all in files outside this context could not be confirmed: only 12 of the 25 context files are listed. The alphabetical listing stops at tests_labels.rs, so tests_limits_preview.rs (which would sort next) may be in the context. That file tests an MCP tool's read-only h"
       }
     },
     "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/mcp-tools": {
@@ -9714,6 +9716,36 @@
           "evidence": "crates/store-firestore/src/benchmarks.rs:91 Runs that share a start instant come back in an order Firestore chooses, so the promotion gate reading them can change its verdict on unchanged data. The residual is documented but not fixed or demoted. The PG twin is deterministic."
         }
       ]
+    },
+    "ae45e444-9735-4d0d-a66c-a946ba4d5e88/mcp-tools": {
+      "context": "pg-platform-operations",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:21:39.834Z",
+      "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
+      "techniques": []
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/mcp-tools": {
+      "context": "pii-scrubbing",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:21:39.834Z",
+      "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
+      "techniques": []
+    },
+    "9aa1714b-d868-4684-8328-325d5d249aed/mcp-tools": {
+      "context": "pg-event-telemetry",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:21:39.834Z",
+      "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
+      "techniques": []
     }
   }
 }
