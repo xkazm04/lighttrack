@@ -1,0 +1,136 @@
+{
+ "schema": "conform-run/1",
+ "worker": "f37f80af-4b2b-4729-a218-a1e89e011db4",
+ "subject": "status-vocabulary",
+ "evaluatedAt": "2026-11-04T04:11:08.481245+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-rendering",
+   "subject": "status-vocabulary",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:25 The CI-gate verdict is an approval vocabulary, yet an unrecognised status falls through to a neutral dot and prints the raw wire token as the headline. A sixth verdict therefore reads as calm rather than as least-approved, which is the reverse of the fallback direction the standard requires.",
+   "techniques": [
+    {
+     "technique": "status-color-mapping",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:25 The unknown gate verdict degrades to the calm neutral glyph and echoes the raw token. For a pass/regress approval vocabulary it should fall back to the least-approved member."
+    },
+    {
+     "technique": "vocabulary-chain-integrity",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:19 The presentation table is a match on a bare &str taken from serde_json::Value, and the render crate depends only on serde_json. Nothing typechecks the table against the verdict set. The parity test lists five literal members and does not read the contract, so a sixth member is not caught, and the unknown path is never reported."
+    },
+    {
+     "technique": "vocabulary-evolution-checklist",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:71 The run status vocabulary in core (score.rs BenchmarkRun.status) gained `partial`, `cancelled` and `no_baseline`, but the shared status_glyph table was never extended. Those runs render as a neutral dot beside the raw token: the presentation layer was forgotten when the members were added."
+    },
+    {
+     "technique": "claim-rests-on-its-source",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:55 The word \"Best\" is printed only when the runner's significance test says so. An untested or non-significant leader is labelled \"Highest mean\", so the word claims no more than its basis supports."
+    },
+    {
+     "technique": "number-formatting",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/benchmarks.rs:78 The `ms` unit is bound inside the branch that has a value. An absent p50 renders the bare `\u2014` sentinel instead of `\u2014ms`. Money goes through the shared money() primitive, which keeps sub-cent precision."
+    },
+    {
+     "technique": "untrusted-label-rendering",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/datasets.rs:98 User-authored dataset input is length-bounded and routed through Table::row, which escapes pipes and newlines once for every renderer."
+    }
+   ],
+   "registryProposal": "status-color-mapping assumes a themed colour surface. For text/Markdown renderers (CLI, MCP tool output), the 'semantic role' is an emoji or glyph set. The technique could say explicitly that the glyph table is the role layer, so that reserved-attention-hue and epistemic-marks can be judged on glyph-only surfaces."
+  },
+  {
+   "context": "observability-rendering",
+   "subject": "status-vocabulary",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/alerts.rs:98 Alert severity is a closed enum in core (Severity: Info/Warning/Critical), but the renderer matches a bare string and sends any unknown severity to the calmest member, '\u00b7 info'. A unit test pins that behaviour, so an unhandled severity is hidden behind an informational badge.",
+   "techniques": [
+    {
+     "technique": "status-color-mapping",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/alerts.rs:98 Unknown severities degrade toward the calm value instead of the most severe one. The test at alerts.rs:225 (`severity_badge(\"whatever\"), \"\u00b7 info\"`) turns the defect into specified behaviour, which the technique explicitly refuses."
+    },
+    {
+     "technique": "vocabulary-chain-integrity",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/md.rs:143 One string-keyed glyph table serves several free-form vocabularies (run, job, event). It has no totality against any closed type and no production report for a miss; an unknown token silently becomes '\u00b7'."
+    },
+    {
+     "technique": "vocabulary-evolution-checklist",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/md.rs:145 Run statuses `partial`, `cancelled` and `no_baseline` that core now mints have no arm here. Members were added upstream without extending the presentation table."
+    },
+    {
+     "technique": "claim-rests-on-its-source",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/alerts.rs:81 The delivery verdict is derived from the per-channel attempt evidence. '\u2705' appears only when every attempt succeeded; no attempts renders '\u2205 none' rather than an implied success."
+    },
+    {
+     "technique": "number-formatting",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/md.rs:161 The single money primitive keeps sub-cent spend visible, renders zero as '$0', and puts the sign before the symbol. Callers such as traces/events map an absent cost to the uniform '\u2014' sentinel, and a test pins that the sentinel carries no ornament."
+    },
+    {
+     "technique": "untrusted-label-rendering",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/md.rs:40 Cell escaping (pipe and newline) happens once inside the table primitive. Payloads use the fence-safe fenced() and trunc() bounds geometry."
+    },
+    {
+     "technique": "epistemic-marks",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/traces.rs:166 The stale mark is attached to the score value and states its basis, which is good. But it is drawn with the warning glyph this crate uses for warning statuses, so it is not a family separate from status tones. Moderate confidence."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-04T04:11:08.481245+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "status-vocabulary"
+   ],
+   "techniques": [
+    "claim-rests-on-its-source",
+    "number-formatting",
+    "status-color-mapping",
+    "untrusted-label-rendering",
+    "vocabulary-chain-integrity",
+    "vocabulary-evolution-checklist"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:11:08.481245+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "status-vocabulary"
+   ],
+   "techniques": [
+    "claim-rests-on-its-source",
+    "epistemic-marks",
+    "number-formatting",
+    "status-color-mapping",
+    "untrusted-label-rendering",
+    "vocabulary-chain-integrity",
+    "vocabulary-evolution-checklist"
+   ],
+   "deviations": 1,
+   "context": "observability-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

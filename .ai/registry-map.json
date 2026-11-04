@@ -3335,12 +3335,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/render/src/benchmarks.rs:25 The benchmark CI-gate verdict falls back to a neutral dot and echoes the raw token for unknown statuses rather than failing closed to the least-approved member.",
-          "evaluatedAt": "2026-10-16",
-          "evaluatedAgainst": "sha256-b2:bea7b30fd48d528d",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/render/src/benchmarks.rs:25 The CI-gate verdict is an approval vocabulary, yet an unrecognised status falls through to a neutral dot and prints the raw wire token as the headline. A sixth verdict therefore reads as calm rather than as least-approved, which is the reverse of the fallback direction the standard requires.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6a9ab99285e2cac0",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "cost-metering",
@@ -4703,12 +4702,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/render/src/alerts.rs:98 The alert severity mapping falls back to the calmest value ('· info') for unknown severities instead of degrading toward the most severe member, masking unhandled alert severities behind an informational badge.",
-          "evaluatedAt": "2026-10-16",
-          "evaluatedAgainst": "sha256-b2:bea7b30fd48d528d",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/render/src/alerts.rs:98 Alert severity is a closed enum in core (Severity: Info/Warning/Critical), but the renderer matches a bare string and sends any unknown severity to the calmest member, '· info'. A unit test pins that behaviour, so an unhandled severity is hidden behind an informational badge.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6a9ab99285e2cac0",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",

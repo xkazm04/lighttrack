@@ -6574,84 +6574,118 @@
       "subject": "status-vocabulary",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-16",
-      "evaluatedTs": "2026-10-16T04:22:57.952Z",
-      "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:11:08.481Z",
+      "worker": "f37f80af-4b2b-4729-a218-a1e89e011db4",
       "techniques": [
         {
           "technique": "status-color-mapping",
           "verdict": "deviation",
-          "evidence": "crates/render/src/alerts.rs:98 Unknown severities degrade to the calmest member ('· info') rather than the most severe member ('critical'), which is asserted as expected behavior in test at alerts.rs:225."
+          "evidence": "crates/render/src/alerts.rs:98 Unknown severities degrade toward the calm value instead of the most severe one. The test at alerts.rs:225 (`severity_badge(\"whatever\"), \"· info\"`) turns the defect into specified behaviour, which the technique explicitly refuses."
         },
         {
           "technique": "vocabulary-chain-integrity",
           "verdict": "deviation",
-          "evidence": "crates/render/src/md.rs:143 Status glyph presentation accepts a bare string slice rather than a closed wire union, bypassing compile-time exhaustiveness and silently degrading unhandled members to a neutral dot."
-        },
-        {
-          "technique": "timestamp-display",
-          "verdict": "deviation",
-          "evidence": "crates/render/src/md.rs:214 short_ts performs naive byte-range string slicing of RFC3339 timestamps without timezone conversion, locale resolution, or relative/elapsed time formatting."
-        },
-        {
-          "technique": "untrusted-label-rendering",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/md.rs:40 Table::row enforces escaping at the primitive boundary by mapping each cell through cell() to escape pipe delimiters and collapse newlines."
-        },
-        {
-          "technique": "number-formatting",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/traces.rs:195 The latency unit and plus prefix are bound strictly inside the value-present branch so that absent measurements render the clean unornamented sentinel '—'."
+          "evidence": "crates/render/src/md.rs:143 One string-keyed glyph table serves several free-form vocabularies (run, job, event). It has no totality against any closed type and no production report for a miss; an unknown token silently becomes '·'."
         },
         {
           "technique": "vocabulary-evolution-checklist",
           "verdict": "deviation",
-          "evidence": "crates/render/src/lib.rs:133 While endpoint kinds are tested against the contract, display status vocabularies lack a compile-time checklist or gate ensuring new variants update wire types, catalogs, and presentation tables together."
+          "evidence": "crates/render/src/md.rs:145 Run statuses `partial`, `cancelled` and `no_baseline` that core now mints have no arm here. Members were added upstream without extending the presentation table."
+        },
+        {
+          "technique": "claim-rests-on-its-source",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/alerts.rs:81 The delivery verdict is derived from the per-channel attempt evidence. '✅' appears only when every attempt succeeded; no attempts renders '∅ none' rather than an implied success."
+        },
+        {
+          "technique": "number-formatting",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/md.rs:161 The single money primitive keeps sub-cent spend visible, renders zero as '$0', and puts the sign before the symbol. Callers such as traces/events map an absent cost to the uniform '—' sentinel, and a test pins that the sentinel carries no ornament."
+        },
+        {
+          "technique": "untrusted-label-rendering",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/md.rs:40 Cell escaping (pipe and newline) happens once inside the table primitive. Payloads use the fence-safe fenced() and trunc() bounds geometry."
+        },
+        {
+          "technique": "epistemic-marks",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/traces.rs:166 The stale mark is attached to the score value and states its basis, which is good. But it is drawn with the warning glyph this crate uses for warning statuses, so it is not a family separate from status tones. Moderate confidence."
+        },
+        {
+          "technique": "timestamp-display",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/md.rs:214 short_ts performs naive byte-range string slicing of RFC3339 timestamps without timezone conversion, locale resolution, or relative/elapsed time formatting.",
+          "carriedFrom": "2026-10-16"
         }
       ],
-      "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like ✅, ❌, ⚠️, ⏳, •, ·) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/render/src/alerts.rs:98 The alert severity mapping falls back to the calmest value ('· info') for unknown severities instead of degrading toward the most severe member, masking unhandled alert severities behind an informational badge.",
+          "evaluatedAt": "2026-10-16T04:22:57.952Z",
+          "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+          "reason": "replaced by f37f80af-4b2b-4729-a218-a1e89e011db4"
+        }
+      ]
     },
     "9dc97639-bd28-43ef-bb53-96fb8ef10967/status-vocabulary": {
       "context": "evaluation-rendering",
       "subject": "status-vocabulary",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-16",
-      "evaluatedTs": "2026-10-16T04:22:57.952Z",
-      "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:11:08.481Z",
+      "worker": "f37f80af-4b2b-4729-a218-a1e89e011db4",
       "techniques": [
         {
           "technique": "status-color-mapping",
           "verdict": "deviation",
-          "evidence": "crates/render/src/benchmarks.rs:25 Benchmark gate verdicts are approval decisions, but unknown status tokens degrade to a neutral dot and leak the raw token string instead of degrading toward the least approved member."
+          "evidence": "crates/render/src/benchmarks.rs:25 The unknown gate verdict degrades to the calm neutral glyph and echoes the raw token. For a pass/regress approval vocabulary it should fall back to the least-approved member."
         },
         {
           "technique": "vocabulary-chain-integrity",
           "verdict": "deviation",
-          "evidence": "crates/render/src/jobs.rs:29 Job statuses are handled as raw strings and rendered by interpolating the unvalidated wire token directly beside an ungated glyph lookup."
-        },
-        {
-          "technique": "timestamp-display",
-          "verdict": "deviation",
-          "evidence": "crates/render/src/schedules.rs:34 Schedule due times are formatted through short_ts with static trimming rather than relative duration formatting, timezone adjustment, or clock-skew clamping."
-        },
-        {
-          "technique": "untrusted-label-rendering",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/prompts.rs:57 Prompt content is enclosed in a dynamically sized backtick fence exceeding any backtick sequence in the text, preventing untrusted content from breaking out into markdown markup."
-        },
-        {
-          "technique": "number-formatting",
-          "verdict": "conformant",
-          "evidence": "crates/render/src/benchmarks.rs:78 The latency unit is concatenated strictly within the value-present map closure, preventing the placeholder from being corrupted into an ornamented sentinel like '—ms'."
+          "evidence": "crates/render/src/benchmarks.rs:19 The presentation table is a match on a bare &str taken from serde_json::Value, and the render crate depends only on serde_json. Nothing typechecks the table against the verdict set. The parity test lists five literal members and does not read the contract, so a sixth member is not caught, and the unknown path is never reported."
         },
         {
           "technique": "vocabulary-evolution-checklist",
           "verdict": "deviation",
-          "evidence": "crates/render/src/benchmarks.rs:17 Coverage of gate status variants relies on manual assertions and code comments rather than a four-layer compile-time evolution checklist."
+          "evidence": "crates/render/src/benchmarks.rs:71 The run status vocabulary in core (score.rs BenchmarkRun.status) gained `partial`, `cancelled` and `no_baseline`, but the shared status_glyph table was never extended. Those runs render as a neutral dot beside the raw token: the presentation layer was forgotten when the members were added."
+        },
+        {
+          "technique": "claim-rests-on-its-source",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/compare.rs:55 The word \"Best\" is printed only when the runner's significance test says so. An untested or non-significant leader is labelled \"Highest mean\", so the word claims no more than its basis supports."
+        },
+        {
+          "technique": "number-formatting",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/benchmarks.rs:78 The `ms` unit is bound inside the branch that has a value. An absent p50 renders the bare `—` sentinel instead of `—ms`. Money goes through the shared money() primitive, which keeps sub-cent precision."
+        },
+        {
+          "technique": "untrusted-label-rendering",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/datasets.rs:98 User-authored dataset input is length-bounded and routed through Table::row, which escapes pipes and newlines once for every renderer."
+        },
+        {
+          "technique": "timestamp-display",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/schedules.rs:34 Schedule due times are formatted through short_ts with static trimming rather than relative duration formatting, timezone adjustment, or clock-skew clamping.",
+          "carriedFrom": "2026-10-16"
         }
       ],
-      "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like ✅, ❌, ⚠️, ⏳, •, ·) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+      "registryProposal": "status-color-mapping assumes a themed colour surface. For text/Markdown renderers (CLI, MCP tool output), the 'semantic role' is an emoji or glyph set. The technique could say explicitly that the glyph table is the role layer, so that reserved-attention-hue and epistemic-marks can be judged on glyph-only surfaces.",
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:25 The benchmark CI-gate verdict falls back to a neutral dot and echoes the raw token for unknown statuses rather than failing closed to the least-approved member.",
+          "evaluatedAt": "2026-10-16T04:22:57.952Z",
+          "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+          "reason": "replaced by f37f80af-4b2b-4729-a218-a1e89e011db4"
+        }
+      ]
     },
     "1c799276-3129-490e-b740-b5c16c49e59f/supply-chain": {
       "context": "claude-invocation-and-execution",
