@@ -1,0 +1,172 @@
+{
+  "schema": "conform-run/1",
+  "worker": "72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4",
+  "subject": "agent-runtime-assembly",
+  "evaluatedAt": "2026-11-04T02:53:31.517729+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "gateway-proxy",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/gateway/src/chat.rs:51 The admission gate (and the tool-contract refusal before it) returns from the handler before `tel.emit` at chat.rs:83. A request refused by the limits policy therefore never reaches the telemetry ledger: the ledger sits inside the gate that answers calls itself, so it cannot see the refused calls.",
+      "techniques": [
+        {
+          "technique": "semantic-hook-placement",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/chat.rs:83 Telemetry is emitted only after admission and the tool gate have both passed. That gives exactly the 'ledger has gaps on refused calls' trigger the technique names. The recording step should wrap every short-circuiting gate."
+        },
+        {
+          "technique": "guard-input-custody",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/admission.rs:53 Custody holds: the limit policy lives in the API, out of the calling app's reach. But when that input is missing, the guard falls back to admitting with only a stderr line, which is the permissive degradation that rule 4 forbids. The fail-open is a documented choice, but it is still a deviation."
+        },
+        {
+          "technique": "substituted-result-attribution",
+          "verdict": "conformant",
+          "evidence": "crates/gateway/src/chat.rs:178 A fallback answer names the target that produced it (served_by, x-lighttrack-served-by), the model it reported, fell_back, and the full list of attempts, so a substituted producer is never passed off as the requested one."
+        },
+        {
+          "technique": "session-scoped-capability",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:38 Tool capability is a property of the provider, checked for the whole chain before dispatch. It does not depend on the client, so the session rule does not bind."
+        },
+        {
+          "technique": "host-routes-win",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/router.rs:15 The router holds only host-defined routes. There is no contributed router to mount."
+        },
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/failover.rs:71 A timed-out seat is a per-request transient that moves on to the next target. The gateway is stateless, so no restart recovery exists."
+        }
+      ]
+    },
+    {
+      "context": "storage-and-jobs",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/api/src/jobs.rs:121 This context is the durable job queue (claim, renew, stale reclaim, cancel) plus store maintenance. The golden path explicitly assigns the job record to job-coordination, not runtime assembly. A grep of crates/api/src for subagent, plugin, mutator and hook_chain found zero hits.",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:76 Reclaiming a dead worker's job is lease-expiry job coordination. There is no agent-loop tool call to close as indeterminate."
+        }
+      ],
+      "absenceTerms": [
+        "subagent",
+        "plugin",
+        "mutator",
+        "hook_chain"
+      ]
+    },
+    {
+      "context": "api-contract-core",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/contract/src/lib.rs:10 The crate is the endpoint table and the renderers that generate surfaces from it (OpenAPI, MCP catalog). That is the tool wire, which the golden path assigns to mcp-tools, and nothing here assembles an agent runtime. A grep of crates/contract/src for subagent, plugin, mutator and hook_chain found zero hits.",
+      "techniques": [
+        {
+          "technique": "session-scoped-capability",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/mcp.rs:26 Write gating is an operator/process policy, not a client-surface capability. Its pairing half is still realized: the roster filter here and the run-time refusal in is_write_tool both derive from the same `mutating` flag."
+        },
+        {
+          "technique": "observer-and-mutator-surfaces",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/mcp.rs:35 This splits read tools from write tools for an external client. It is not a registration surface for contributed extensions."
+        }
+      ],
+      "absenceTerms": [
+        "subagent",
+        "plugin",
+        "mutator",
+        "hook_chain"
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "agent-runtime-assembly",
+      "context": "claude-invocation-and-execution",
+      "reason": "evidence leans on codex/posture.rs, which is not a tracked file"
+    },
+    {
+      "subject": "agent-runtime-assembly",
+      "context": "device-relay-agent",
+      "reason": "withdrawn after review: reviewer (sonnet): exec.rs:84-103 shows this context does assemble the child runtime's posture: system prompt, output schema, allowed_tools, permission_mode, budget, timeout, bare flag and cwd. That contradicts 'assembles no ... extension surface', and the absence grep (hook/subagent/plugin/checkpoint) never searched "
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-04T02:53:31.517729+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "bounded-projection-of-external-work",
+        "indeterminate-closure-on-interruption",
+        "nested-run-is-not-its-parent"
+      ],
+      "deviations": 0,
+      "context": "device-relay-agent",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T02:53:31.517729+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "guard-input-custody",
+        "host-routes-win",
+        "indeterminate-closure-on-interruption",
+        "semantic-hook-placement",
+        "session-scoped-capability",
+        "substituted-result-attribution"
+      ],
+      "deviations": 1,
+      "context": "gateway-proxy",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T02:53:31.517729+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "indeterminate-closure-on-interruption"
+      ],
+      "deviations": 0,
+      "context": "storage-and-jobs",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T02:53:31.517729+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "observer-and-mutator-surfaces",
+        "session-scoped-capability"
+      ],
+      "deviations": 0,
+      "context": "api-contract-core",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}

@@ -714,8 +714,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "not-applicable",
+          "priorNotApplicable": 3,
+          "evidence": "crates/contract/src/lib.rs:10 The crate is the endpoint table and the renderers that generate surfaces from it (OpenAPI, MCP catalog). That is the tool wire, which the golden path assigns to mcp-tools, and nothing here assembles an agent runtime. A grep of crates/contract/src for subagent, plugin, mutator and hook_chain found zero hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "data-access",
@@ -2713,11 +2717,7 @@
           "confidence": "probable",
           "state": "not-applicable",
           "evidence": "crates/agent/src/run.rs:57 The `lt-agent` binary runs a polling loop that leases tasks from cloud LightTrack instances over HTTPS and executes them via the Claude Code CLI; grepping `crates/agent` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, demonstrating that it is an edge task executor rather than an agent runtime assembling an in-process hook chain.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
-          "evaluatedRevision": 27,
-          "revisionsBehind": 1,
-          "stale": true
+          "evaluatedAt": "2026-10-13"
         },
         {
           "subject": "proof-carrying-agent-actions",
@@ -4116,8 +4116,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "deviation",
+          "priorNotApplicable": 3,
+          "evidence": "crates/gateway/src/chat.rs:51 The admission gate (and the tool-contract refusal before it) returns from the handler before `tel.emit` at chat.rs:83. A request refused by the limits policy therefore never reaches the telemetry ledger: the ledger sits inside the gate that answers calls itself, so it cannot see the refused calls.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "mcp-tools",
@@ -7427,8 +7431,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "not-applicable",
+          "priorNotApplicable": 3,
+          "evidence": "crates/api/src/jobs.rs:121 This context is the durable job queue (claim, renew, stale reclaim, cancel) plus store maintenance. The golden path explicitly assigns the job record to job-coordination, not runtime assembly. A grep of crates/api/src for subagent, plugin, mutator and hook_chain found zero hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "job-coordination",

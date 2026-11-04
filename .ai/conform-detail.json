@@ -2320,31 +2320,58 @@
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T04:09:27.257Z",
-      "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:53:31.517Z",
       "techniques": [
         {
           "technique": "bounded-projection-of-external-work",
           "verdict": "not-applicable",
-          "evidence": "crates/agent/src/run.rs:69 The device runner executes leased external tasks from the relay queue as an edge worker, rather than an agent conversation loop submitting external operations."
+          "evidence": "crates/agent/src/run.rs:241 This is the executor side of job coordination: a result from a lost lease is discarded. No model loop here polls remote status, so the technique's precondition does not hold."
+        },
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:183 After a lease loss the device writes nothing. How an orphaned task is closed belongs to the cloud's job record (job-coordination), not this binary."
+        },
+        {
+          "technique": "nested-run-is-not-its-parent",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:29 The parent is a polling daemon, not an agent run, so the child CLI run has no parent run to inherit identity from."
         },
         {
           "technique": "assembly-identity",
           "verdict": "not-applicable",
-          "evidence": "crates/agent/src/exec.rs:48 The runner computes a PromptIdentity over the rendered action prompt text, which the standard defines as prompt-assembly rather than assembly-identity."
+          "evidence": "crates/agent/src/exec.rs:48 The runner computes a PromptIdentity over the rendered action prompt text, which the standard defines as prompt-assembly rather than assembly-identity.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "operator-tier-code-loading",
           "verdict": "not-applicable",
-          "evidence": "crates/agent/src/main.rs:43 Configuration loads device polling parameters and cloud endpoints from an operator TOML file without dynamically importing or executing contributed extension code."
+          "evidence": "crates/agent/src/main.rs:43 Configuration loads device polling parameters and cloud endpoints from an operator TOML file without dynamically importing or executing contributed extension code.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "session-scoped-capability",
           "verdict": "not-applicable",
-          "evidence": "crates/agent/src/inventory.rs:36 The local action inventory enumerates executable disk directories to filter cloud task leasing rather than determining session-scoped tool capabilities."
+          "evidence": "crates/agent/src/inventory.rs:36 The local action inventory enumerates executable disk directories to filter cloud task leasing rather than determining session-scoped tool capabilities.",
+          "carriedFrom": "2026-10-13"
         }
-      ]
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:57 The `lt-agent` binary runs a polling loop that leases tasks from cloud LightTrack instances over HTTPS and executes them via the Claude Code CLI; grepping `crates/agent` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, demonstrating that it is an edge task executor rather than an agent runtime assembling an in-process hook chain.",
+          "evaluatedAt": "2026-10-13T04:09:27.257Z",
+          "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+          "reason": "replaced by 72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4"
+        }
+      ],
+      "withdrawn": {
+        "worker": "72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4",
+        "state": "not-applicable",
+        "at": "2026-11-04T02:54:05.097799+00:00",
+        "reason": "reviewer (sonnet): exec.rs:84-103 shows this context does assemble the child runtime's posture: system prompt, output schema, allowed_tools, permission_mode, budget, timeout, bare flag and cwd. That contradicts 'assembles no ... extension surface', and the absence grep (hook/subagent/plugin/checkpoint) never searched "
+      }
     },
     "a89f25a3-bf61-4f19-a72a-357db8fcdefe/breach-alerting-and-attribution": {
       "context": "alerts-system",
@@ -9511,6 +9538,84 @@
         "at": "2026-11-04T02:36:02.065383+00:00",
         "reason": "reviewer (sonnet): The not-applicable is contradicted by the crate's own text: lib.rs:10-13, stamp.rs:5 and Cargo.toml:11 say scrubbing rewrites the evidence the judge reads, and stamp.rs records which rules did it. That makes it an instrument condition for eval validity, and lib.rs:6 is only a description line that d"
       }
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/agent-runtime-assembly": {
+      "context": "gateway-proxy",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:53:31.517Z",
+      "worker": "72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4",
+      "techniques": [
+        {
+          "technique": "semantic-hook-placement",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/chat.rs:83 Telemetry is emitted only after admission and the tool gate have both passed. That gives exactly the 'ledger has gaps on refused calls' trigger the technique names. The recording step should wrap every short-circuiting gate."
+        },
+        {
+          "technique": "guard-input-custody",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/admission.rs:53 Custody holds: the limit policy lives in the API, out of the calling app's reach. But when that input is missing, the guard falls back to admitting with only a stderr line, which is the permissive degradation that rule 4 forbids. The fail-open is a documented choice, but it is still a deviation."
+        },
+        {
+          "technique": "substituted-result-attribution",
+          "verdict": "conformant",
+          "evidence": "crates/gateway/src/chat.rs:178 A fallback answer names the target that produced it (served_by, x-lighttrack-served-by), the model it reported, fell_back, and the full list of attempts, so a substituted producer is never passed off as the requested one."
+        },
+        {
+          "technique": "session-scoped-capability",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:38 Tool capability is a property of the provider, checked for the whole chain before dispatch. It does not depend on the client, so the session rule does not bind."
+        },
+        {
+          "technique": "host-routes-win",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/router.rs:15 The router holds only host-defined routes. There is no contributed router to mount."
+        },
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/failover.rs:71 A timed-out seat is a per-request transient that moves on to the next target. The gateway is stateless, so no restart recovery exists."
+        }
+      ]
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/agent-runtime-assembly": {
+      "context": "storage-and-jobs",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:53:31.517Z",
+      "worker": "72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:76 Reclaiming a dead worker's job is lease-expiry job coordination. There is no agent-loop tool call to close as indeterminate."
+        }
+      ]
+    },
+    "664d493f-717e-4161-8f17-f667cc0cfdb9/agent-runtime-assembly": {
+      "context": "api-contract-core",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:53:31.517Z",
+      "worker": "72dc014f-b0e9-4c0a-9dfc-3a95d662c1f4",
+      "techniques": [
+        {
+          "technique": "session-scoped-capability",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/mcp.rs:26 Write gating is an operator/process policy, not a client-surface capability. Its pairing half is still realized: the roster filter here and the run-time refusal in is_write_tool both derive from the same `mutating` flag."
+        },
+        {
+          "technique": "observer-and-mutator-surfaces",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/mcp.rs:35 This splits read tools from write tools for an external client. It is not a registration surface for contributed extensions."
+        }
+      ]
     }
   }
 }
