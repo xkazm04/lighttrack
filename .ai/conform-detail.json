@@ -9379,6 +9379,56 @@
           "evidence": "crates/api/src/prompt_canary_sweep/tests.rs:208 Each test gets a private in-memory store and AppState, discarded whole."
         }
       ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/agent-memory": {
+      "context": "evaluation-pipeline",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:20:17.795Z",
+      "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
+      "techniques": []
+    },
+    "f715b154-0057-44d0-bb0a-80f4caee36ba/agent-memory": {
+      "context": "firestore-core-dataplane",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:20:17.795Z",
+      "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
+      "techniques": []
+    },
+    "6e365da5-0e1a-415f-8d3f-d66e7f2451a4/agent-memory": {
+      "context": "sqlite-governance-backend",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:20:17.795Z",
+      "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
+      "techniques": []
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/agent-memory": {
+      "context": "mcp-server",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:20:17.795Z",
+      "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
+      "techniques": []
+    },
+    "f05f2284-1f27-40ad-bee2-deb67099160b/agent-memory": {
+      "context": "sqlite-observability-backend",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:20:17.795Z",
+      "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
+      "techniques": []
     }
   }
 }

@@ -2942,8 +2942,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "strong",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/api/src/prompts.rs:1 This context serves datasets, scores, rubrics, judges and a registry of human-authored prompts behind HTTP routes; no agent carries working, episodic or consolidated memory forward here, and a case-insensitive search of crates/api for recall, memories, consolidat and episodic found 0 hits. ('episode' appears only as a limit-breach episode in limits_preview, which is not memory.)",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "quality-gates",
@@ -3738,8 +3742,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "strong",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store-firestore/src/lib.rs:1 This is a Store-trait backend for events, costs, projects, limits, prices, prompts and revenue; it holds no agent beliefs, episodes or recall path, and a case-insensitive search of crates/store-firestore for recall, memories, consolidat and episodic found 0 hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "mcp-tools",
@@ -4449,8 +4457,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/mcp/src/main.rs:4 lt-mcp is a stateless, thin HTTP client that agents call through tools; it keeps no memory across sessions (no DB access, no store of its own), and a case-insensitive search of crates/mcp for memory, recall, memories, consolidat and episodic found 0 hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "agent-instruction-files",
@@ -7004,8 +7016,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "strong",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/sqlite/limits.rs:1 These modules are SQLite persistence for limit rules, margin policies, revenue, prices, the usage cache and alerts; none of it is an agent memory store, and a case-insensitive search of crates/store/src/sqlite for recall, memories, consolidat and episodic found 0 hits. ('memory' does appear there, but only as SQLite's in-memory database in tests, so it was not used as an absence term.)",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "prompt-assembly",
@@ -7100,8 +7116,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/sqlite/events.rs:1 These modules store observability records (events, scores, traces, benchmarks, datasets, labels, prompts) for operators and judges, not memory an agent recalls into its own context, and a case-insensitive search of crates/store/src/sqlite for recall, memories, consolidat and episodic found 0 hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "test-harness",
