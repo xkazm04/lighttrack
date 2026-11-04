@@ -9429,6 +9429,88 @@
       "evaluatedTs": "2026-11-04T02:20:17.795Z",
       "worker": "382efcbd-ce0b-4de7-ab97-45461b84288e",
       "techniques": []
+    },
+    "a89f25a3-bf61-4f19-a72a-357db8fcdefe/eval-harness": {
+      "context": "alerts-system",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:35:35.299Z",
+      "worker": "9986ef3c-0cc8-4152-91c7-56ac0ad44281",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:158 Score::alert_key (crates/core/src/score.rs:334) returns rubric_id/benchmark/label and leaves out scored_by, so scores from two judges are mixed into one window."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/compose.rs:177 The alert prints one scored_by, taken from the triggering score, for a window that may span several judges, so the point does not carry the instrument versions it was computed over."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:156 A benchmark's case stream is pooled under one key. Baseline = earlier cases and recent = later cases, which are different scenarios, so the drop is not measured at fixed scenario identity."
+        },
+        {
+          "technique": "eval-economics",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/alerts/detectors.rs:88 This is a passive detector over ingested scores. It makes no model calls, so there is no eval spend to budget."
+        }
+      ]
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/eval-harness": {
+      "context": "api-integration-tests",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:35:35.299Z",
+      "worker": "9986ef3c-0cc8-4152-91c7-56ac0ad44281",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:615 The mixed-judge row is annotated, not split, and filtering by one judge still returns the pooled quality. Note: tests_labels.rs:172 does correctly refuse to inherit calibration trust across judges."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_labels.rs:433 A frozen dataset returns 409 on new items, so the exam cannot change under a pinned run."
+        },
+        {
+          "technique": "certification-levels",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_eval_targets.rs:137 A green run that never resolved the prompt version cannot promote it. The pass has to have observed the actual target."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_collective.rs:1102 Rigor (determinism/frozen/significance) rides the row and can be filtered on, so instrument conditions travel with the number."
+        },
+        {
+          "technique": "selection-over-noise",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_collective.rs:374 Run count and variance travel with each contributed quality figure."
+        }
+      ]
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/eval-harness": {
+      "context": "pii-scrubbing",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T02:35:35.299Z",
+      "techniques": [],
+      "withdrawn": {
+        "worker": "9986ef3c-0cc8-4152-91c7-56ac0ad44281",
+        "state": "not-applicable",
+        "at": "2026-11-04T02:36:02.065383+00:00",
+        "reason": "reviewer (sonnet): The not-applicable is contradicted by the crate's own text: lib.rs:10-13, stamp.rs:5 and Cargo.toml:11 say scrubbing rewrites the evidence the judge reads, and stamp.rs records which rules did it. That makes it an instrument condition for eval validity, and lib.rs:6 is only a description line that d"
+      }
     }
   }
 }

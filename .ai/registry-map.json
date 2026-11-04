@@ -655,7 +655,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:158 The score-drop window is keyed on project plus rubric id (or benchmark) and never on the judge, so when the judge model changes, scores from the old and new judge land in one baseline-vs-recent mean, and the instrument change fires as a product quality regression.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         }
       ],
       "governance": "governed"
@@ -984,7 +988,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:615 The test pins a leaderboard where a single-judge filter returns a row whose quality averages anthropic- and openai-judged contributions (leaderboard.rs:152 retains on any match). Two instruments are spliced under a label that names one.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "untrusted-extension-host",

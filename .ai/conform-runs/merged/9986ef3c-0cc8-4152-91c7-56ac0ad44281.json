@@ -1,0 +1,139 @@
+{
+  "schema": "conform-run/1",
+  "worker": "9986ef3c-0cc8-4152-91c7-56ac0ad44281",
+  "subject": "eval-harness",
+  "evaluatedAt": "2026-11-04T02:35:35.299287+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "alerts-system",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/api/src/alerts/ledger.rs:158 The score-drop window is keyed on project plus rubric id (or benchmark) and never on the judge, so when the judge model changes, scores from the old and new judge land in one baseline-vs-recent mean, and the instrument change fires as a product quality regression.",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:158 Score::alert_key (crates/core/src/score.rs:334) returns rubric_id/benchmark/label and leaves out scored_by, so scores from two judges are mixed into one window."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/compose.rs:177 The alert prints one scored_by, taken from the triggering score, for a window that may span several judges, so the point does not carry the instrument versions it was computed over."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:156 A benchmark's case stream is pooled under one key. Baseline = earlier cases and recent = later cases, which are different scenarios, so the drop is not measured at fixed scenario identity."
+        },
+        {
+          "technique": "eval-economics",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/alerts/detectors.rs:88 This is a passive detector over ingested scores. It makes no model calls, so there is no eval spend to budget."
+        }
+      ]
+    },
+    {
+      "context": "api-integration-tests",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/api/src/tests_collective.rs:615 The test pins a leaderboard where a single-judge filter returns a row whose quality averages anthropic- and openai-judged contributions (leaderboard.rs:152 retains on any match). Two instruments are spliced under a label that names one.",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_collective.rs:615 The mixed-judge row is annotated, not split, and filtering by one judge still returns the pooled quality. Note: tests_labels.rs:172 does correctly refuse to inherit calibration trust across judges."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_labels.rs:433 A frozen dataset returns 409 on new items, so the exam cannot change under a pinned run."
+        },
+        {
+          "technique": "certification-levels",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_eval_targets.rs:137 A green run that never resolved the prompt version cannot promote it. The pass has to have observed the actual target."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_collective.rs:1102 Rigor (determinism/frozen/significance) rides the row and can be filtered on, so instrument conditions travel with the number."
+        },
+        {
+          "technique": "selection-over-noise",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_collective.rs:374 Run count and variance travel with each contributed quality figure."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "eval-harness",
+      "context": "firestore-eval-collective",
+      "reason": "the seat returned unknown"
+    },
+    {
+      "subject": "eval-harness",
+      "context": "store-conformance-observability",
+      "reason": "the seat returned unknown"
+    },
+    {
+      "subject": "eval-harness",
+      "context": "pii-scrubbing",
+      "reason": "withdrawn after review: reviewer (sonnet): The not-applicable is contradicted by the crate's own text: lib.rs:10-13, stamp.rs:5 and Cargo.toml:11 say scrubbing rewrites the evidence the judge reads, and stamp.rs records which rules did it. That makes it an instrument condition for eval validity, and lib.rs:6 is only a description line that d"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-04T02:35:35.299287+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "eval-harness"
+      ],
+      "techniques": [
+        "comparison-modes",
+        "eval-economics",
+        "judge-stability",
+        "scenario-design"
+      ],
+      "deviations": 1,
+      "context": "alerts-system",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T02:35:35.299287+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "eval-harness"
+      ],
+      "techniques": [
+        "certification-levels",
+        "comparison-modes",
+        "judge-stability",
+        "scenario-design",
+        "selection-over-noise"
+      ],
+      "deviations": 1,
+      "context": "api-integration-tests",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T02:35:35.299287+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "eval-harness"
+      ],
+      "techniques": [],
+      "deviations": 0,
+      "context": "pii-scrubbing",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
