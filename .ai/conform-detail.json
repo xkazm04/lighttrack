@@ -9746,6 +9746,52 @@
       "evaluatedTs": "2026-11-04T03:21:39.834Z",
       "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
       "techniques": []
+    },
+    "32c31d6e-f9fb-4806-855a-b6056d920f34/agent-memory": {
+      "context": "firestore-eval-collective",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:34:59.357Z",
+      "worker": "1d46bded-4d31-41cd-adda-ecb928ceb584",
+      "techniques": []
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/agent-memory": {
+      "context": "device-relay-agent",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:34:59.357Z",
+      "worker": "1d46bded-4d31-41cd-adda-ecb928ceb584",
+      "techniques": [
+        {
+          "technique": "working-memory",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:42 The prompt is a one-shot render of template plus task. No resumed task and no operative state crosses a run boundary."
+        }
+      ]
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/agent-memory": {
+      "context": "api-integration-tests",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:34:59.357Z",
+      "worker": "1d46bded-4d31-41cd-adda-ecb928ceb584",
+      "techniques": []
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/agent-memory": {
+      "context": "pii-scrubbing",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:34:59.357Z",
+      "worker": "1d46bded-4d31-41cd-adda-ecb928ceb584",
+      "techniques": []
     }
   }
 }

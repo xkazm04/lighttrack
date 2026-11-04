@@ -975,8 +975,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/api/src/tests_labels.rs:1 These are router-level integration tests of LightTrack's observability, eval and governance API. The API exposes no agent memory surface to test. A search of crates/api/src found 0 hits for recall, episodic, consolidat and memories; 'memory' appears only as 'in-memory SqliteStore', and 'forget'/'decay' in unrelated senses.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "eval-harness",
@@ -2595,8 +2599,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/agent/src/exec.rs:42 Each leased relay task gets a prompt built only from the action's template and that task's payload, then one stateless Claude Code CLI run, so nothing carries forward between tasks for a memory pipeline to govern. A search of crates/agent found 0 hits for recall, episodic, consolidat and memories; the single 'memory' hit is a progress.rs comment about stack memory.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "agent-instruction-files",
@@ -3852,8 +3860,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store-firestore/src/labels.rs:1 This context is a Firestore Store backend for evaluation data (benchmarks, datasets, rubrics, job leases, human labels, collective entries, alerts). No agent ever reads it as working, episodic or consolidated memory. A case-insensitive search of crates/store-firestore found 0 hits for recall, episodic, consolidat and memories; the only 'memory' hits are 'in-memory' ordering in contributions.rs.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "test-harness",
@@ -5456,8 +5468,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/anon/src/lib.rs:1 This crate is a deterministic regex PII scrubber with stamp and export helpers. It has no agent, no persisted beliefs and no recall path. A search of crates/anon found 0 hits for recall, episodic, consolidat, memories and memory.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "test-harness",
