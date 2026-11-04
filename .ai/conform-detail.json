@@ -3233,34 +3233,46 @@
       "subject": "quality-regression-gating",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T10:19:29.073Z",
-      "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:28:34.743Z",
+      "worker": "0a08524b-24b6-4c54-924c-20f396a335ec",
       "techniques": [
         {
           "technique": "baseline-carries-its-conditions",
           "verdict": "deviation",
-          "evidence": "crates/api/src/benchmarks.rs:216 The API records no baseline source run, setter or measured instrument and dataset revision; its later predicate accepts missing pins and compares run pins against current benchmark settings."
+          "evidence": "crates/api/src/benchmarks.rs:386 The predicate compares the run's judge with bench.judge_model (current config), not with the judge that produced the baseline. A legacy run with no pins is treated as comparable ('absence is not disagreement'), which contradicts the rule that a baseline predating recorded conditions is unverifiable."
+        },
+        {
+          "technique": "partial-run-never-green",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:434 Halted, refused and cancelled runs become 'partial' on the gate endpoint and never fall through to the scalar compare. The promotion gate also blocks on ev.incomplete."
+        },
+        {
+          "technique": "unverified-vs-regressed-exit-states",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:430 The gate endpoint keeps pass, regressed, no_baseline, no_runs and partial as distinct states, and an expired-conditions refusal becomes no_baseline with a caveat. Caveat: the promotion gate allows when no baseline is set (prompts_gate.rs:155)."
         },
         {
           "technique": "family-wise-correction",
           "verdict": "deviation",
-          "evidence": "crates/api/src/prompts_gate.rs:191 Promotion can add a regression block using report.ci95, the uncorrected interval, even when a multi-target runner verdict passed at the corrected threshold."
-        },
-        {
-          "technique": "partial-run-never-green",
-          "verdict": "deviation",
-          "evidence": "crates/api/src/prompts_gate.rs:157 Without a baseline, regression_refusal returns before examining incomplete status, allowing a resolved partial or cancelled run to promote without reporting its partiality."
+          "evidence": "crates/api/src/prompts_gate.rs:191 Promotion can add a regression block using report.ci95, the uncorrected interval, even when a multi-target runner verdict passed at the corrected threshold.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "tested-superiority-claims",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/quality.rs:10 The inspected API surfaces expose measurements and stored run payloads without making a model-winner claim."
-        },
+          "evidence": "crates/api/src/quality.rs:10 The inspected API surfaces expose measurements and stored run payloads without making a model-winner claim.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "registryProposal": "baseline-carries-its-conditions could name a specific failure mode: a predicate that compares the run's recorded conditions against the entity's CURRENT configuration rather than against the baseline's own conditions. It looks like a conditions check, but after a deliberate judge switch every new run passes it while the floor is still the old instrument's number. Its 'absence is not disagreement' leniency for legacy runs also directly contradicts the technique's 'predates recording → unverifiable' rule, and the technique could say how to reconcile that with avoiding mass over-refusal.",
+      "superseded": [
         {
-          "technique": "unverified-vs-regressed-exit-states",
-          "verdict": "deviation",
-          "evidence": "crates/api/src/benchmarks.rs:438 Unrecognized run statuses submitted across the HTTP boundary can fall through to a passing scalar comparison instead of becoming unverified."
+          "state": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:216 Benchmark creation stores an unqualified scalar baseline, leaving subsequent gates unable to establish its measurement conditions.",
+          "evaluatedAt": "2026-10-13T10:19:29.073Z",
+          "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+          "reason": "replaced by 0a08524b-24b6-4c54-924c-20f396a335ec"
         }
       ]
     },
@@ -3269,14 +3281,28 @@
       "subject": "quality-regression-gating",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T10:19:29.073Z",
-      "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:28:34.743Z",
+      "worker": "0a08524b-24b6-4c54-924c-20f396a335ec",
       "techniques": [
         {
           "technique": "baseline-carries-its-conditions",
           "verdict": "deviation",
-          "evidence": "crates/core/src/score.rs:443 The complete Benchmark definition has no baseline source-run, setter or baseline-specific judge and dataset revision record."
+          "evidence": "crates/core/src/score.rs:443 Procedure step 1 ('store the baseline as a record, never as a scalar') is not realized: there are no condition fields beside the number."
+        },
+        {
+          "technique": "paired-per-case-testing",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/score.rs:309 Per-case scores carry run_id and case_index identity, so per-case evidence is recorded and pairing by identity is possible from stored data."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:443 The benchmark data model represents its baseline mean as a scalar without a record of the conditions that make comparison defensible.",
+          "evaluatedAt": "2026-10-13T10:19:29.073Z",
+          "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+          "reason": "replaced by 0a08524b-24b6-4c54-924c-20f396a335ec"
         }
       ]
     },

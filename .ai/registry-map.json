@@ -3078,12 +3078,11 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/api/src/benchmarks.rs:216 Benchmark creation stores an unqualified scalar baseline, leaving subsequent gates unable to establish its measurement conditions.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:2fa1e4fd027c9e92",
-          "evaluatedRevision": 8,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/src/benchmarks.rs:216 Benchmark creation stores the baseline as a bare float, with no set-at time, source run, judge or dataset version. The gate's comparability predicate (`instrument_moved`) can therefore only compare a run's pinned judge against the benchmark's *current* judge. After a judge switch, every new run matches the current judge and is floor-tested against a baseline set under the old judge without any refusal. The promotion gate (`prompts_gate::regression_refusal`) applies no conditions predicate at all.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:9548319fbd9c4eae",
+          "evaluatedRevision": 9,
+          "revisionsBehind": 1
         },
         {
           "subject": "test-harness",
@@ -3503,12 +3502,11 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/core/src/score.rs:443 The benchmark data model represents its baseline mean as a scalar without a record of the conditions that make comparison defensible.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:2fa1e4fd027c9e92",
-          "evaluatedRevision": 8,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/score.rs:443 The Benchmark data model stores its baseline as a bare `Option<f64>`, with no set-at time, source run id, judge model or version, or dataset version. Every downstream gate therefore cannot tell whether the baseline still describes the current instrument and case set, so baseline expiry is unanswerable at the type level.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:9548319fbd9c4eae",
+          "evaluatedRevision": 9,
+          "revisionsBehind": 1
         },
         {
           "subject": "scoring-rubrics",
