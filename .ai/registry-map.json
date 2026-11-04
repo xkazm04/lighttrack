@@ -1238,7 +1238,11 @@
           "revision": 10,
           "changedAt": "2026-10-27",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/Cargo.toml:6 The API crate is an ingest and query REST service. Its dependencies do not include the engine crate, and a search of crates/api for `Command::new`, `resolve_claude_bin`, `codex exec` and `allowedTools` found nothing, so it spawns no agent CLI. The only `claude -p` mentions are doc comments in relay.rs about metering device-run results.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10
         },
         {
           "subject": "docs-sync",

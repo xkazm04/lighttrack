@@ -9938,6 +9938,52 @@
       "evaluatedTs": "2026-11-04T04:17:49.171Z",
       "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
       "techniques": []
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/agent-cli-transport": {
+      "context": "api-platform",
+      "subject": "agent-cli-transport",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:30:54.862Z",
+      "worker": "e8e0b7ea-301e-4caa-a488-5ec9492de84c",
+      "techniques": []
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/agent-cli-transport": {
+      "context": "runner-worker-pipeline",
+      "subject": "agent-cli-transport",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:30:54.862Z",
+      "techniques": [
+        {
+          "technique": "fallback-ladder",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/serve.rs:55 The probe result does not narrow the claim (serve.rs:77 passes p.kinds unchanged). There is no recorded descent reason and no labeled lower rung."
+        },
+        {
+          "technique": "output-normalization",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/dataset.rs:246 An empty answer from the LLM anonymization pass is silently ignored and the regex-only output is returned as if the pass ran. The empty answer should be a named failure or a labeled fallback."
+        },
+        {
+          "technique": "availability-probe",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/serve.rs:52 The worker's startup readiness line repeats the engine probe's file-presence 'credentials found' as a healthy banner. That is the confident-yes-from-unknown the technique warns about."
+        },
+        {
+          "technique": "subscription-auth-selection",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/cli.rs:24 Metered billing is an explicit operator flag passed to the engine's single door, not something inherited from the environment."
+        }
+      ],
+      "withdrawn": {
+        "worker": "e8e0b7ea-301e-4caa-a488-5ec9492de84c",
+        "state": "deviation",
+        "at": "2026-11-04T04:31:22.940284+00:00",
+        "reason": "reviewer (sonnet): The cli.rs:24 anchor is the `claude_bin` option doc and shows no metered-billing flag, and grep of cli.rs finds no 'meter', so that claim is unconfirmed; the 'no descent reason' claim is also overstated, because serve.rs:55 prints the probe's failure reason."
+      }
     }
   }
 }
