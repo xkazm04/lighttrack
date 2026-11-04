@@ -1600,7 +1600,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/tests/docker_exec.rs:122 The test named the_candidate_arrives_intact_including_non_ascii sends a pure-ASCII probe: `\\\\u00a0` puts an escape sequence in the Python source rather than a U+00A0 byte, and the first assert ends in `or True`. A transport that mangled non-ASCII bytes would still pass, so the claim in the name is never reached.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "engine-binding-surface",
@@ -3098,7 +3102,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/prompt_canary_sweep/tests.rs:260 The test reads LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS from the inherited process environment without taking the workspace EnvGuard or clearing the variable, so it goes red on any machine whose shell exports that operator setting.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         }
       ],
       "governance": "governed"
@@ -4358,7 +4366,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "scripts/gates.sh:64 The judge-eval lane is defined by a cargo name filter with no floor on how many tests it selects, so renaming the `corpus` module would make the lane select zero tests and still print PASS; the cases.len() floor inside the test cannot fire when the test is never selected.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         }
       ],
       "governance": "governed"
@@ -7107,7 +7119,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/tests_concurrency.rs:139 The claim that a read is not blocked by an open write transaction is asserted as a wall-clock bound (under 200 ms), so a loaded runner can turn it red with no defect present. Observing order instead (the read completed while the writer still held its uncommitted transaction) would decide it without a stopwatch.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "eval-harness",

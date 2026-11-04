@@ -9212,6 +9212,155 @@
         }
       ],
       "registryProposal": "Tool-output producers (MCP renderers) inherit this subject's 'truncation names what it dropped' rule and consumer-coupled-decoration, but context-budgeting is written only for the assembler. A sentence saying the honest-truncation discipline binds every producer whose output lands in model context, or a pointer to tool-result-economy, would remove the ambiguity."
+    },
+    "70358003-cc4e-4553-ba3c-e864f30850d1/test-harness": {
+      "context": "judge-and-scoring",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:50:15.645Z",
+      "worker": "d9773e42-e29f-41bb-8fe5-c614bccd509f",
+      "techniques": [
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "deviation",
+          "evidence": "scripts/gates.sh:64 Filter-defined lane with no selected-count floor, and cargo exits 0 when nothing matches. The corpus also runs inside `cargo test --workspace`, so only the named lane goes falsely green."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/tests/corpus.rs:202 Changes a rubric weight and asserts the recorded overall stops holding, which proves the eval can go red."
+        },
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/tests/corpus.rs:23 Whole verdicts are held in a committed corpus, read at compile time. There is no record mode at all, so re-baselining can only happen as a reviewable data diff to corpus.json."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/tests/deterministic.rs:178 Asserts which producer made the value (deterministic, not a model), and NeverGen errors if the model is called."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/tests.rs:589 Takes the workspace env lock and removes the developer's GEMINI/GOOGLE keys, so nothing is inherited from the shell."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/tests.rs:46 Unit tests use the cheapest fixture tier: in-memory fakes behind the Generator seam, with no environment build."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/judge/tests.rs:562 The concurrency test claims the aggregate is equal under --jobs, not that work overlapped or was cut off, and it uses no wall clock."
+        }
+      ]
+    },
+    "1c799276-3129-490e-b740-b5c16c49e59f/test-harness": {
+      "context": "claude-invocation-and-execution",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:50:15.645Z",
+      "worker": "d9773e42-e29f-41bb-8fe5-c614bccd509f",
+      "techniques": [
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "deviation",
+          "evidence": "crates/engine/tests/docker_exec.rs:117 The name claims non-ASCII arrives intact, but no non-ASCII byte crosses stdin, so the decision the name names is never mutated or reached."
+        },
+        {
+          "technique": "recorded-interaction-fixtures",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/codex/events.rs:3 The fixtures are captured traffic that names the service version and date, and codex_live.rs is the live freshness lane."
+        },
+        {
+          "technique": "assert-through-the-reader",
+          "verdict": "conformant",
+          "evidence": "crates/engine/tests/codex_live.rs:18 The emitted codex argv is checked by running the real codex binary in an opt-in lane. The claude argv, by contrast, is only string-pinned in the posture tests."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/engine/tests/docker_exec.rs:53 The same test runs a known-bad candidate and requires Fail{code:1} alongside the Pass."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/invocation/run.rs:212 The verdict is the Timeout variant. The elapsed bound is one-sided and about 15x the 200 ms deadline, a hang guard rather than the verdict."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/invocation/posture/tests.rs:152 The billing-key test sets and clears ANTHROPIC_API_KEY under the workspace lock instead of trusting the shell."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/codex/audit.rs:287 The scratch directory is keyed by pid, and leftovers from a crashed run are removed before the fixture is built."
+        }
+      ]
+    },
+    "f05f2284-1f27-40ad-bee2-deb67099160b/test-harness": {
+      "context": "sqlite-observability-backend",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:50:15.645Z",
+      "worker": "d9773e42-e29f-41bb-8fe5-c614bccd509f",
+      "techniques": [
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/tests_concurrency.rs:139 An overlap claim proved by elapsed time rather than by observed order. The sibling test at line 156 was already repaired for the same class of scheduler-dependence."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/tests_concurrency.rs:136 The comment names the mutation that makes the test fail."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/tests_concurrency.rs:202 The test proves the reader was actually reached instead of passing on an empty window."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/tests_concurrency.rs:103 Each file-backed test owns a temp directory that is reaped on drop."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/tests_migration.rs:29 The migration is tested against a database file in the old schema, an honest seed for a rebuild migration. Other tests use per-test in-memory stores, a cheap build of a 180-line schema."
+        }
+      ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/test-harness": {
+      "context": "evaluation-pipeline",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T01:50:15.645Z",
+      "worker": "d9773e42-e29f-41bb-8fe5-c614bccd509f",
+      "techniques": [
+        {
+          "technique": "isolation-lanes",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompt_canary_sweep/tests.rs:260 It inherits the developer's environment, contrary to the crate's own EnvGuard convention (used in alerts, redact, contribute and relay tests)."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompt_canary_sweep/tests.rs:208 Each test gets a private in-memory store and AppState, discarded whole."
+        }
+      ]
     }
   }
 }
