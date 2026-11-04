@@ -10290,6 +10290,70 @@
           "evidence": "crates/runner/src/budget.rs:213 Asserts the pricing decision was actually reached (usd > 0) before comparing. Otherwise the unpriced default of 0 would satisfy the equality."
         }
       ]
+    },
+    "3e637b68-74b5-4382-9828-f785f4ed1323/agent-runtime-assembly": {
+      "context": "typescript-sdk",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:09:41.034Z",
+      "worker": "7a5a1c85-9eeb-42b3-82b8-9e253ec9eace",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/index.ts:421 The recovered call is closed with a definite failure verdict, and the indeterminacy is recovered from RECOVERED_TAG (journal.ts:47) and unsettledError() prose. The vocabulary has no first-class indeterminate status. The tag is better than message matching but still sits beside a false status."
+        },
+        {
+          "technique": "semantic-hook-placement",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/index.ts:387 In the wrapper, the admission gate (lt.gate) runs before the recorder and can refuse a call by throwing. The refused call is recorded only when recordBlocked is set (index.ts:592), so by default the ledger has gaps on exactly the refused calls."
+        },
+        {
+          "technique": "substituted-result-attribution",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/instrument.ts:172 A frame that does not enter the continuation throws a typed refusal (LightTrackBudgetExceeded) and never fabricates a provider-shaped result. Every returned value comes from the real provider call."
+        }
+      ],
+      "registryProposal": "semantic-hook-placement says a recorder must sit outside every gate that can answer a call. It does not address the case here: the ledger write is itself metered against the cap that refused the call, which is why the SDK defaults recordBlocked off. The technique could say whether a refused-call record must be exempt from the cap it reports on, rather than optional."
+    },
+    "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/agent-runtime-assembly": {
+      "context": "api-endpoint-table",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:09:41.034Z",
+      "techniques": [
+        {
+          "technique": "host-routes-win",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:4 Every route is host-declared and checked by a bijection test against build_router. No contribution can mount handlers."
+        }
+      ],
+      "withdrawn": {
+        "worker": "7a5a1c85-9eeb-42b3-82b8-9e253ec9eace",
+        "state": "not-applicable",
+        "at": "2026-11-04T05:10:05.851128+00:00",
+        "reason": "reviewer (sonnet): The anchor mod.rs:4 is a doc comment about row ordering, not proof that no extension or contributed-route surface exists; the bijection test it relies on is not in the context files, and the greps ('plugin', 'subagent', 'mutator', 'allowedTools') are weak terms for this subject."
+      }
+    },
+    "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/agent-runtime-assembly": {
+      "context": "sqlite-platform-backend",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:09:41.034Z",
+      "worker": "7a5a1c85-9eeb-42b3-82b8-9e253ec9eace",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/jobs.rs:127 Recovery writes a distinguishing sentence (JOB_ERROR_WORKER_LOST / RELAY_ERROR_DEVICE_LOST) instead of an indeterminate status. It also silently re-issues metered generation work instead of closing it and reconciling spend. Counting stale_reclaims on its own key (jobs.rs:126) is conformant with the technique's restart-counting rule."
+        }
+      ]
     }
   }
 }

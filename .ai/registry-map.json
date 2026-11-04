@@ -884,8 +884,8 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "priorNotApplicable": 3,
+          "state": "unknown"
         },
         {
           "subject": "quality-gates",
@@ -7385,8 +7385,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "deviation",
+          "priorNotApplicable": 3,
+          "evidence": "crates/store/src/sqlite/jobs.rs:127 A job whose worker died is reclaimed straight back to 'running' and re-issued, with 'worker lost' stamped only as error prose. Expired relay leases are likewise re-leased or set to 'dead' carrying the device-lost string (relay.rs:130). Interrupted metered work is therefore re-run or closed as a failure, never closed as indeterminate.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "dynamic-secret-lifecycle",
@@ -8189,8 +8193,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 3
+          "state": "deviation",
+          "priorNotApplicable": 3,
+          "evidence": "clients/typescript/src/index.ts:421 On startup the journal recovery closes calls left open by a killed process as status=error. Their unknown outcome is carried only in a tag and an explanatory error string, so error-rate alerting and anything else that branches on status counts an indeterminate call as a definite failure.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28
         },
         {
           "subject": "concurrency-guards",

@@ -1,0 +1,112 @@
+{
+  "schema": "conform-run/1",
+  "worker": "7a5a1c85-9eeb-42b3-82b8-9e253ec9eace",
+  "subject": "agent-runtime-assembly",
+  "evaluatedAt": "2026-11-04T05:09:41.034013+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "typescript-sdk",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "clients/typescript/src/index.ts:421 On startup the journal recovery closes calls left open by a killed process as status=error. Their unknown outcome is carried only in a tag and an explanatory error string, so error-rate alerting and anything else that branches on status counts an indeterminate call as a definite failure.",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/index.ts:421 The recovered call is closed with a definite failure verdict, and the indeterminacy is recovered from RECOVERED_TAG (journal.ts:47) and unsettledError() prose. The vocabulary has no first-class indeterminate status. The tag is better than message matching but still sits beside a false status."
+        },
+        {
+          "technique": "semantic-hook-placement",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/index.ts:387 In the wrapper, the admission gate (lt.gate) runs before the recorder and can refuse a call by throwing. The refused call is recorded only when recordBlocked is set (index.ts:592), so by default the ledger has gaps on exactly the refused calls."
+        },
+        {
+          "technique": "substituted-result-attribution",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/instrument.ts:172 A frame that does not enter the continuation throws a typed refusal (LightTrackBudgetExceeded) and never fabricates a provider-shaped result. Every returned value comes from the real provider call."
+        }
+      ],
+      "registryProposal": "semantic-hook-placement says a recorder must sit outside every gate that can answer a call. It does not address the case here: the ledger write is itself metered against the cap that refused the call, which is why the SDK defaults recordBlocked off. The technique could say whether a refused-call record must be exempt from the cap it reports on, rather than optional."
+    },
+    {
+      "context": "sqlite-platform-backend",
+      "subject": "agent-runtime-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/store/src/sqlite/jobs.rs:127 A job whose worker died is reclaimed straight back to 'running' and re-issued, with 'worker lost' stamped only as error prose. Expired relay leases are likewise re-leased or set to 'dead' carrying the device-lost string (relay.rs:130). Interrupted metered work is therefore re-run or closed as a failure, never closed as indeterminate.",
+      "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/jobs.rs:127 Recovery writes a distinguishing sentence (JOB_ERROR_WORKER_LOST / RELAY_ERROR_DEVICE_LOST) instead of an indeterminate status. It also silently re-issues metered generation work instead of closing it and reconciling spend. Counting stale_reclaims on its own key (jobs.rs:126) is conformant with the technique's restart-counting rule."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "agent-runtime-assembly",
+      "context": "claude-invocation-and-execution",
+      "reason": "evidence leans on codex/posture.rs, which is not a tracked file"
+    },
+    {
+      "subject": "agent-runtime-assembly",
+      "context": "core-observability-types",
+      "reason": "evidence leans on conformance/relay.rs, which is not a tracked file"
+    },
+    {
+      "subject": "agent-runtime-assembly",
+      "context": "api-endpoint-table",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor mod.rs:4 is a doc comment about row ordering, not proof that no extension or contributed-route surface exists; the bijection test it relies on is not in the context files, and the greps ('plugin', 'subagent', 'mutator', 'allowedTools') are weak terms for this subject."
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-04T05:09:41.034013+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "indeterminate-closure-on-interruption",
+        "semantic-hook-placement",
+        "substituted-result-attribution"
+      ],
+      "deviations": 1,
+      "context": "typescript-sdk",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T05:09:41.034013+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "host-routes-win"
+      ],
+      "deviations": 0,
+      "context": "api-endpoint-table",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T05:09:41.034013+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-runtime-assembly"
+      ],
+      "techniques": [
+        "indeterminate-closure-on-interruption"
+      ],
+      "deviations": 1,
+      "context": "sqlite-platform-backend",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
