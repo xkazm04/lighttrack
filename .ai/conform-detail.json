@@ -10433,6 +10433,53 @@
         "at": "2026-11-04T05:20:05.420212+00:00",
         "reason": "reviewer (sonnet): The anchor crates/gateway/src/config.rs:1 is only the routing-config doc header, so it does not show that benchmark operations are absent; the 0-hit search is real but uses narrow terms, and I could not confirm that the golden path places the gateway outside this subject, whose name includes cross-p"
       }
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/mcp-tools": {
+      "context": "api-platform",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:42:22.315Z",
+      "worker": "4d197776-bf8b-4a93-9dd1-166639c0f650",
+      "techniques": [
+        {
+          "technique": "authentication-and-scoping",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/guards.rs:65 Project keys are fine: they are per-consumer, carry a minted key_id and scopes, are read from the store on every call, and name the missing scope. But the admin-only MCP tools need the shared admin secret, which has no identity, and auth_scopes.rs:31 lets it pass every scope. That is the shared-password and omnibus-scope anti-pattern."
+        },
+        {
+          "technique": "caller-differentiated-capability",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/main.rs:87 The agent surface is a stated subset: secret-minting operations are published as off-MCP. Separately, guards.rs keeps the refusals distinct (missing, invalid, key_expired, project_disabled)."
+        },
+        {
+          "technique": "enumeration-without-a-scope",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/auth.rs:144 Every principal derives a server-verified tenant scope that list operations are evaluated under. This is the 'durable identity exists, so scope it' case."
+        },
+        {
+          "technique": "server-composition",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/auth_scopes.rs:16 Access is declared once in lighttrack-contract, the same table that declares MCP tools, and one router layer enforces it before any extractor runs."
+        },
+        {
+          "technique": "tool-schema-design",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/error.rs:4 This only enables the error-channel split: stable machine codes let the MCP layer route failures without string-matching. The split itself lives in crates/mcp, outside this context."
+        }
+      ],
+      "registryProposal": "When the tool server is a thin pass-through client (here lt-mcp forwards LIGHTTRACK_KEY to an HTTP API), the dispatch door and key registry that authentication-and-scoping governs belong to the backing service, not the tool process. The technique could say explicitly that its per-consumer and no-omnibus rules then bind the backing API's credential model, including any admin secret that tool calls require."
+    },
+    "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/mcp-tools": {
+      "context": "sqlite-platform-backend",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:42:22.315Z",
+      "worker": "4d197776-bf8b-4a93-9dd1-166639c0f650",
+      "techniques": []
     }
   }
 }

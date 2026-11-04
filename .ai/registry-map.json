@@ -1146,7 +1146,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/guards.rs:65 Presenting the one shared admin secret yields an identity-less Principal::Admin that passes every scope check, and 18 of the contract's MCP tools (e.g. enqueue_benchmark) are Access::Admin, so an agent consumer of those tools must hold an omnibus, non-per-consumer credential whose calls cannot be attributed or revoked surgically.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "prompt-assembly",
@@ -7377,7 +7381,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store/src/sqlite/mod.rs:3 This context is a persistence backend of free functions over a SQLite connection with no tool surface. A search of crates/store/src/sqlite for mcp, jsonrpc, readOnlyHint and tools/call found nothing; the only store mention of mcp is in crates/store/src/lib.rs, outside this context.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "agent-runtime-assembly",

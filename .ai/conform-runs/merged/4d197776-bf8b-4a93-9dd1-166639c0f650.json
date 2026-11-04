@@ -1,0 +1,103 @@
+{
+ "schema": "conform-run/1",
+ "worker": "4d197776-bf8b-4a93-9dd1-166639c0f650",
+ "subject": "mcp-tools",
+ "evaluatedAt": "2026-11-04T05:42:22.315809+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-platform",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/guards.rs:65 Presenting the one shared admin secret yields an identity-less Principal::Admin that passes every scope check, and 18 of the contract's MCP tools (e.g. enqueue_benchmark) are Access::Admin, so an agent consumer of those tools must hold an omnibus, non-per-consumer credential whose calls cannot be attributed or revoked surgically.",
+   "techniques": [
+    {
+     "technique": "authentication-and-scoping",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/guards.rs:65 Project keys are fine: they are per-consumer, carry a minted key_id and scopes, are read from the store on every call, and name the missing scope. But the admin-only MCP tools need the shared admin secret, which has no identity, and auth_scopes.rs:31 lets it pass every scope. That is the shared-password and omnibus-scope anti-pattern."
+    },
+    {
+     "technique": "caller-differentiated-capability",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/main.rs:87 The agent surface is a stated subset: secret-minting operations are published as off-MCP. Separately, guards.rs keeps the refusals distinct (missing, invalid, key_expired, project_disabled)."
+    },
+    {
+     "technique": "enumeration-without-a-scope",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/auth.rs:144 Every principal derives a server-verified tenant scope that list operations are evaluated under. This is the 'durable identity exists, so scope it' case."
+    },
+    {
+     "technique": "server-composition",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/auth_scopes.rs:16 Access is declared once in lighttrack-contract, the same table that declares MCP tools, and one router layer enforces it before any extractor runs."
+    },
+    {
+     "technique": "tool-schema-design",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/error.rs:4 This only enables the error-channel split: stable machine codes let the MCP layer route failures without string-matching. The split itself lives in crates/mcp, outside this context."
+    }
+   ],
+   "registryProposal": "When the tool server is a thin pass-through client (here lt-mcp forwards LIGHTTRACK_KEY to an HTTP API), the dispatch door and key registry that authentication-and-scoping governs belong to the backing service, not the tool process. The technique could say explicitly that its per-consumer and no-omnibus rules then bind the backing API's credential model, including any admin secret that tool calls require."
+  },
+  {
+   "context": "sqlite-platform-backend",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/sqlite/mod.rs:3 This context is a persistence backend of free functions over a SQLite connection with no tool surface. A search of crates/store/src/sqlite for mcp, jsonrpc, readOnlyHint and tools/call found nothing; the only store mention of mcp is in crates/store/src/lib.rs, outside this context.",
+   "techniques": [],
+   "absenceTerms": [
+    "mcp",
+    "jsonrpc",
+    "readOnlyHint",
+    "tools/call"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "mcp-tools",
+   "context": "api-integration-tests",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "mcp-tools",
+   "context": "cli-infrastructure",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T05:42:22.315809+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "authentication-and-scoping",
+    "caller-differentiated-capability",
+    "enumeration-without-a-scope",
+    "server-composition",
+    "tool-schema-design"
+   ],
+   "deviations": 1,
+   "context": "api-platform",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T05:42:22.315809+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "sqlite-platform-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
