@@ -1397,7 +1397,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/billing/src/lib.rs:24 The crate verifies billing webhooks and normalizes them into RevenueEvents. It never builds model input: a case-insensitive grep of crates/billing for prompt, system_prompt, template and compaction found no hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         }
       ],
       "governance": "governed"
@@ -3803,7 +3807,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-firestore/src/prompts.rs:71 The backend only persists prompt-registry documents and never renders, budgets or assembles a prompt: grep of crates/store-firestore/src for compaction, assembler, template and system_prompt found no hits. Its prompts.rs is a CRUD mapper.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "margin-and-unit-economics",
@@ -7513,7 +7521,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/redact.rs:22 These files handle stored prompts only as captured telemetry to redact, plus job and schedule plumbing (jobs_enqueue carries a prompt_id/version only for traceability), and nothing here assembles model input: grep of crates/api/src for compaction, assembler, context_window and cache_control found no hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "engine-host-contract",

@@ -9792,6 +9792,68 @@
       "evaluatedTs": "2026-11-04T03:34:59.357Z",
       "worker": "1d46bded-4d31-41cd-adda-ecb928ceb584",
       "techniques": []
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/prompt-assembly": {
+      "context": "evaluation-pipeline",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:48:40.680Z",
+      "techniques": [
+        {
+          "technique": "variable-interpolation",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts.rs:195 The template is admitted with no declared variable contract. The runner's renderer (crates/runner/src/targets.rs, outside this context) substitutes only `{{input}}`, so any other placeholder in a template would go to the model as literal syntax, and the registry door never rejects it."
+        },
+        {
+          "technique": "fingerprinting-and-cache-keys",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts.rs:293 Each resolution returns a version stamp for an immutable, monotonically numbered version, and the stamp goes on traffic. The promotion gate also requires the run's own RESOLVED_PROMPT_VERSION (prompts_gate.rs:228), so a behaviour change can be traced to the prompt version that actually ran."
+        },
+        {
+          "technique": "deferred-interface-invalidation",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/prompts.rs:253 The registry holds no live conversation. A label promotion only changes what the next fetch resolves, so there is no mid-session rewrite of a standing layer to defer."
+        }
+      ],
+      "registryProposal": "The subject covers systems that own an assembler. It does not address a prompt registry that serves versioned templates to assemblers it does not own, where the variable contract would have to be declared with the stored template. The variable-interpolation technique could say whether that declaration duty transfers to the registry.",
+      "withdrawn": {
+        "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
+        "state": "deviation",
+        "at": "2026-11-04T03:50:36.246633+00:00",
+        "reason": "reviewer (sonnet): Every anchor (crates/api/src/prompts.rs:195, :253, :293) is in prompts.rs, which is not among the evaluation-pipeline context files. The quoted lines are accurate, but the verdict is about the prompt-registry context, not this one."
+      }
+    },
+    "00e9cbd9-1f34-4dbb-91be-6ad436bce75b/prompt-assembly": {
+      "context": "billing-provider-adapters",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:48:40.680Z",
+      "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
+      "techniques": []
+    },
+    "f715b154-0057-44d0-bb0a-80f4caee36ba/prompt-assembly": {
+      "context": "firestore-core-dataplane",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:48:40.680Z",
+      "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
+      "techniques": []
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/prompt-assembly": {
+      "context": "storage-and-jobs",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:48:40.680Z",
+      "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
+      "techniques": []
     }
   }
 }
