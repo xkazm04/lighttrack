@@ -1,0 +1,173 @@
+{
+ "schema": "conform-run/1",
+ "worker": "90e81e85-759b-412e-9802-06f9244b9ce1",
+ "subject": "test-harness",
+ "evaluatedAt": "2026-11-04T05:02:36.834370+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:534 The test named `every_kind_round_trips_through_its_wire_string` runs over the hand-written array `ScoreKind::ALL: [ScoreKind; 8]`, not over the enum itself. A new variant added to the enum but not to the array compiles and leaves this green, so the 'every kind' claim is really a claim about the list (job.rs:234 has the same shape over `JobKind::ALL`).",
+   "techniques": [
+    {
+     "technique": "gate-scope-is-not-report-scope",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:534 A uniformity claim ('every kind') over a hand-maintained member array. Nothing ties `ALL` to the enum (no exhaustive table the type checker enforces), so a member can be added with nothing going red. The same pattern appears at job.rs:234 (`JobKind::ALL`)."
+    }
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/alert_sign.rs:125 The webhook signature header is input for third-party receivers that implement the docs/ALERTS.md recipe (key = hex sha256(secret), HMAC over \"t.body\"). The tests only round-trip it through the crate's own `verify`, which shares `mac()` with the signer, and there is no known-answer vector for the header. A recipe/code disagreement (for example hex-string key bytes vs raw digest bytes) would stay green while every external receiver rejects deliveries.",
+   "techniques": [
+    {
+     "technique": "assert-through-the-reader",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/alert_sign.rs:125 Oracle is the emitter's own twin, not the reader. Only derive_key has an independent SHA-256 vector (line 192). The full v1 HMAC is never checked against an independent implementation of the documented recipe."
+    },
+    {
+     "technique": "gate-scope-is-not-report-scope",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/alert.rs:241 `every_kind_round_trips_through_its_wire_literal` iterates a hand-written slice `&'static [AlertKind]`. A variant missing from the slice leaves the test green."
+    },
+    {
+     "technique": "derived-selection-must-be-measured",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:230 The text-walking guards declare a floor on what their parsers selected, so a parser that matches nothing goes red instead of exiting green over an empty population."
+    },
+    {
+     "technique": "pin-the-call-not-the-name",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:315 The exemption/mapping list is checked in both directions, and the reasons for each needle live in the asserting file. Line endings are absorbed by the repo-level .gitattributes eol=lf rather than normalised in the asserting file."
+    },
+    {
+     "technique": "negative-control-tests",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/chart_policy_guard.rs:519 Must-fail fixtures break one thing in the shipped chart and assert the named policy fires. They also prove the seeded edit landed (step 2b) before reading the result, and the baseline is asserted clean at line 529."
+    },
+    {
+     "technique": "out-of-graph-artifacts",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/chart_policy_guard.rs:5 The Helm chart was identified as a shipped artifact no gated root reached, and it is now gated. The gate is a text policy over template source, not a render/load, a weaker form the header itself acknowledges."
+    }
+   ]
+  },
+  {
+   "context": "observability-rendering",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/md.rs:297 Markdown emitted for GitHub-flavoured-Markdown readers (CLI terminals, MCP agents, renderers) is asserted on the near side by counting pipe bytes and checking fence prefixes. No Markdown parser is run, so an escape the author believes correct but a GFM reader parses differently would stay green.",
+   "techniques": [
+    {
+     "technique": "assert-through-the-reader",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/md.rs:297 Cell escaping and fence nesting (line 340) are checked as bytes. The program that interprets them, a GFM parser, is never run, even though it is available at unit cost as a dev-dependency."
+    },
+    {
+     "technique": "gate-scope-is-not-report-scope",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/lib.rs:163 Renderer population is derived from the RENDERERS table and checked two-directionally against `lighttrack_contract::endpoints()` (lines 133-157), not hand-listed."
+    }
+   ]
+  },
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "test-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/compare.rs:1730 `cross_target_parallelism_cuts_wall_clock` proves a scheduling claim (fewer rounds under the same --jobs budget) by comparing elapsed wall time of a serial arm (3\u00d750ms) against a parallel arm (2\u00d750ms). On a loaded runner, the stretched timers can stop separating the arms, so this is a flake source with no product defect, and it is exactly the shape the technique names as the failure.",
+   "techniques": [
+    {
+     "technique": "assert-the-schedule-not-the-stopwatch",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:1730 Asserting direction instead of an absolute bound still reads a stopwatch. Counting peak in-flight units, or a barrier that only opens once all units have started, would prove overlap independent of load."
+    },
+    {
+     "technique": "unreached-decisions-pin-nothing",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/budget.rs:213 Asserts the pricing decision was actually reached (usd > 0) before comparing. Otherwise the unpriced default of 0 would satisfy the equality."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "test-harness",
+   "context": "storage-and-jobs",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T05:02:36.834370+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "gate-scope-is-not-report-scope"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T05:02:36.834370+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "assert-through-the-reader",
+    "derived-selection-must-be-measured",
+    "gate-scope-is-not-report-scope",
+    "negative-control-tests",
+    "out-of-graph-artifacts",
+    "pin-the-call-not-the-name"
+   ],
+   "deviations": 1,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T05:02:36.834370+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "assert-through-the-reader",
+    "gate-scope-is-not-report-scope"
+   ],
+   "deviations": 1,
+   "context": "observability-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T05:02:36.834370+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "test-harness"
+   ],
+   "techniques": [
+    "assert-the-schedule-not-the-stopwatch",
+    "unreached-decisions-pin-nothing"
+   ],
+   "deviations": 1,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

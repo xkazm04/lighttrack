@@ -3543,7 +3543,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:534 The test named `every_kind_round_trips_through_its_wire_string` runs over the hand-written array `ScoreKind::ALL: [ScoreKind; 8]`, not over the enum itself. A new variant added to the enum but not to the array compiles and leaves this green, so the 'every kind' claim is really a claim about the list (job.rs:234 has the same shape over `JobKind::ALL`).",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "quality-regression-gating",
@@ -4808,7 +4812,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/md.rs:297 Markdown emitted for GitHub-flavoured-Markdown readers (CLI terminals, MCP agents, renderers) is asserted on the near side by counting pipe bytes and checking fence prefixes. No Markdown parser is run, so an escape the author believes correct but a GFM reader parses differently would stay green.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "operator-surfaces-for-llm-spend",
@@ -6428,7 +6436,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/compare.rs:1730 `cross_target_parallelism_cuts_wall_clock` proves a scheduling claim (fewer rounds under the same --jobs budget) by comparing elapsed wall time of a serial arm (3×50ms) against a parallel arm (2×50ms). On a loaded runner, the stretched timers can stop separating the arms, so this is a flake source with no product defect, and it is exactly the shape the technique names as the failure.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         }
       ],
       "governance": "governed"
@@ -8445,7 +8457,11 @@
           "revision": 27,
           "changedAt": "2026-10-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/alert_sign.rs:125 The webhook signature header is input for third-party receivers that implement the docs/ALERTS.md recipe (key = hex sha256(secret), HMAC over \"t.body\"). The tests only round-trip it through the crate's own `verify`, which shares `mac()` with the signer, and there is no known-answer vector for the header. A recipe/code disagreement (for example hex-string key bytes vs raw digest bytes) would stay green while every external receiver rejects deliveries.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "usage-limit-governance",
