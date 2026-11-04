@@ -2260,12 +2260,11 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/api/src/forecast.rs:258 The erosion forecast drops the unattributed key before fitting it, so a rising unlinked cost slope never gets the trend the technique says it must have.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/src/forecast.rs:258 The erosion forecast drops the unattributed key before fitting any cost slope, so the one surface that fits trends cannot show an unattributed cost slope rising while attributed slopes stay flat (the linkage-erosion signal). Separately, /v1/margin never reports unpriced calls.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c18d4210fdd38f70",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "billing-revenue-normalization",
@@ -2803,12 +2802,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/core/src/margin.rs:103 compute_margin folds only priced cost and call count, so unpriced calls that already contributed $0.00 never reach MarginRow and the rollup understates COGS without the count.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/margin.rs:103 compute_margin keeps only cost_usd and calls from each CostByDimension and drops the store-supplied unpriced_calls, and MarginRow has no field for it, so every margin row (and the simulation built on it) shows a cost floor as if it were the full cost, with no count of the calls it could not price.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c18d4210fdd38f70",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "llm-price-book-operations",
@@ -3788,13 +3786,12 @@
           "revision": 6,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "deviation",
-          "evidence": "crates/store-firestore/src/rollup.rs:11 The daily rollup the forecast reads answers a server-arrival window on client ts and the row carries no marker, so a backdated clock can move spend between forecast days unlabeled.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "conformant",
+          "evidence": "crates/store-firestore/src/revenue.rs:114 Firestore's cost-by-dimension fold sums only priced cost and counts unpriced docs separately, keeps untagged calls under a None key, and reads only the events collection (judge scores go to the separate scores collection), so the cost side it supplies to margin is COGS-only and discloses its floor.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:c18d4210fdd38f70",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         }
       ],
       "governance": "governed"

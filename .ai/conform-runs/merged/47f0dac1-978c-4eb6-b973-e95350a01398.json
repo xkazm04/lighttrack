@@ -1,0 +1,169 @@
+{
+ "schema": "conform-run/1",
+ "worker": "47f0dac1-978c-4eb6-b973-e95350a01398",
+ "subject": "margin-and-unit-economics",
+ "evaluatedAt": "2026-11-04T01:14:19.859085+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "economics-margin-pricing",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/margin.rs:103 compute_margin keeps only cost_usd and calls from each CostByDimension and drops the store-supplied unpriced_calls, and MarginRow has no field for it, so every margin row (and the simulation built on it) shows a cost floor as if it were the full cost, with no count of the calls it could not price.",
+   "techniques": [
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/margin.rs:103 The fold carries cost and calls but discards unpriced_calls (declared at margin.rs:62), and MarginRow (lines 67-76) has nowhere to put it. The trend input DailyKeyCost (margin_trend.rs:21-25) has no unpriced field either. Separating judge spend from production spend is conformant: eval spend goes to scores, not events (module doc, lines 4-5)."
+    },
+    {
+     "technique": "below-filter-honesty",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:118 A row with no revenue gets an absent percentage, not -100% or a sentinel. The two-arm filter itself lives in the api context."
+    },
+    {
+     "technique": "loss-first-ordering",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:123 Sorted by dollar margin ascending. The input is in BTreeSet key order and the sort is stable, so ties break by key. The trend caps keys by |total margin| after computing totals (margin_trend.rs:117-125)."
+    },
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_trend.rs:86 The daily trend reuses the rollup's recognition function over one-day windows. Series are dense with explicit zeros and totals are computed before the cap. forecast_margin fits its slope on the cost series, not on margin (forecast.rs:241)."
+    },
+    {
+     "technique": "pricing-what-if-simulation",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_sim.rs:52 A request with no price is rejected. Cost comes from the real compute_margin, actual margin and delta ride on every row, assumptions echo window_days, and rows sort by simulated margin ascending (line 129). The per-key revenue formula is its own pure function."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:145 A refund is abs-then-negate in the window where it occurs. A valid period (pe > ps) amortizes over its overlap with the window; anything else is point-in-time on a half-open window. One function, shared with the trend."
+    }
+   ]
+  },
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/forecast.rs:258 The erosion forecast drops the unattributed key before fitting any cost slope, so the one surface that fits trends cannot show an unattributed cost slope rising while attributed slopes stay flat (the linkage-erosion signal). Separately, /v1/margin never reports unpriced calls.",
+   "techniques": [
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/forecast.rs:258 The technique says the unattributed key gets a trend like any other. /v1/margin/trend does keep it as a raw series (revenue.rs:407), but the slope-fitting forecast excludes it. Projections are withheld below an evidence floor and listed in refused (lines 288-298), which is conformant."
+    },
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/revenue.rs:181 costs carry per-key unpriced_calls from the store, but MarginResponse (lines 89-110) has no unpriced count. The margin surface never discloses how many calls it could not price."
+    },
+    {
+     "technique": "below-filter-honesty",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:83 Two-arm predicate with percent-to-fraction conversion done once. The below value is echoed in the response only when set (lines 103-108, 229). NaN is rejected. Tests cover the defined-below, undefined-losing and undefined-idle shapes."
+    },
+    {
+     "technique": "loss-first-ordering",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:364 The trend response discloses the cap: key_count, top_n, and an uncapped totals series."
+    },
+    {
+     "technique": "pricing-what-if-simulation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:326 The response is stamped as simulated, echoes its assumptions and the actual-vs-simulated totals, and writes nothing. docs/MARGIN.md:46 discloses that the flat fee is approximate for the unattributed bucket."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:139 The unconverted-currency caveat is read from each stored row's own provenance and echoed with a currency_note. Ingest rejects inverted periods and negative or NaN amounts (lines 47-59)."
+    }
+   ]
+  },
+  {
+   "context": "firestore-core-dataplane",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/store-firestore/src/revenue.rs:114 Firestore's cost-by-dimension fold sums only priced cost and counts unpriced docs separately, keeps untagged calls under a None key, and reads only the events collection (judge scores go to the separate scores collection), so the cost side it supplies to margin is COGS-only and discloses its floor.",
+   "techniques": [
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/revenue.rs:114 Unpriced docs are counted, never summed as $0.00. Untagged calls land in a None key, the unattributed bucket. Judge spend is written to the scores collection (scores.rs:39), not events."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/revenue.rs:137 The listing predicate matches the SQL backends' overlap and half-open point-in-time rule. A webhook redelivery does not restate money unless the minor-unit amount changed (lines 28-41)."
+    },
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/rollup.rs:60 The rollup buckets cost per UTC day per dimension value. Untagged docs fold into the NULL bucket, which feeds the per-day attribution series behind the trend (via rollup_compat::daily_cost_by_dimension). Day is taken from client ts, not arrival time (module note, lines 8-12)."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-04T01:14:19.859085+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "below-filter-honesty",
+    "cogs-by-construction",
+    "loss-first-ordering",
+    "margin-erosion-forecasting",
+    "pricing-what-if-simulation",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 1,
+   "context": "economics-margin-pricing",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T01:14:19.859085+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "below-filter-honesty",
+    "cogs-by-construction",
+    "loss-first-ordering",
+    "margin-erosion-forecasting",
+    "pricing-what-if-simulation",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 1,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T01:14:19.859085+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "cogs-by-construction",
+    "margin-erosion-forecasting",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 0,
+   "context": "firestore-core-dataplane",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
