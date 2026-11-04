@@ -1,0 +1,95 @@
+{
+  "schema": "conform-run/1",
+  "worker": "296e1f82-dca7-4caa-b5ca-f65937e06ef1",
+  "subject": "cross-provider-benchmark-operations",
+  "evaluatedAt": "2026-11-04T05:19:29.199734+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "runner-worker-pipeline",
+      "subject": "cross-provider-benchmark-operations",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evidence": "crates/runner/src/dispatch.rs:107 The queued bench_run job result sets `partial` from the cancel flag only, so a compare run that the live budget ceiling halted (run_benchmark returns status \"partial\") is published on the job as `partial: false` beside `status: \"partial\"`; the partial caveat is printed on the cancel branch and missing on the budget-halt branch.",
+      "techniques": [
+        {
+          "technique": "async-run-queue-with-cancel",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/serve_job.rs:50 A watcher thread polls for cancelling/cancelled and raises the flag; the run stops at the next case boundary. A timer heartbeat renews the lease, and retries are charged to `failures`, not `attempts` (serve_job.rs:105)."
+        },
+        {
+          "technique": "axes-and-caveats-live-at-the-surface",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/dispatch.rs:107 The job-surface partial caveat covers only the cancel branch. A budget-halted run's job result says partial:false, which contradicts its own status field."
+        },
+        {
+          "technique": "budget-preflight-and-ceiling",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/cli.rs:38 The `--max-cost` flag (default $25, 0 disables) drives both the pre-flight abort and the live case-boundary ceiling. The halted run is kept as partial, and aggregate_status (util.rs:103) never rolls it up to passed. The estimator itself is in budget.rs, outside this context."
+        },
+        {
+          "technique": "determinism-stamping",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/util.rs:184 Stamps generation and judging separately. The headline is the weaker of the two, and a half that did not happen is null."
+        },
+        {
+          "technique": "dataset-sampling-anonymize-freeze",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/dataset.rs:106 A regex scrub always runs, with an optional LLM pass. Each item records the method, the redaction count and source_event_id, and the dataset is frozen last (dataset.rs:125). Strategies are recent/random/stratified/errors plus dedupe, and unknown spellings are refused."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "cross-provider-benchmark-operations",
+      "context": "firestore-eval-collective",
+      "reason": "the seat returned unknown"
+    },
+    {
+      "subject": "cross-provider-benchmark-operations",
+      "context": "pg-evaluation-store",
+      "reason": "the seat returned unknown"
+    },
+    {
+      "subject": "cross-provider-benchmark-operations",
+      "context": "gateway-proxy",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor crates/gateway/src/config.rs:1 is only the routing-config doc header, so it does not show that benchmark operations are absent; the 0-hit search is real but uses narrow terms, and I could not confirm that the golden path places the gateway outside this subject, whose name includes cross-p"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-04T05:19:29.199734+00:00",
+      "bundle": "llm-observability",
+      "subjects": [
+        "cross-provider-benchmark-operations"
+      ],
+      "techniques": [
+        "async-run-queue-with-cancel",
+        "axes-and-caveats-live-at-the-surface",
+        "budget-preflight-and-ceiling",
+        "dataset-sampling-anonymize-freeze",
+        "determinism-stamping"
+      ],
+      "deviations": 1,
+      "context": "runner-worker-pipeline",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-04T05:19:29.199734+00:00",
+      "bundle": "llm-observability",
+      "subjects": [
+        "cross-provider-benchmark-operations"
+      ],
+      "techniques": [
+        "entitlement-exhaustion-is-not-ill-health"
+      ],
+      "deviations": 0,
+      "context": "gateway-proxy",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}

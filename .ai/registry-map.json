@@ -6814,7 +6814,11 @@
           "revision": 13,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/dispatch.rs:107 The queued bench_run job result sets `partial` from the cancel flag only, so a compare run that the live budget ceiling halted (run_benchmark returns status \"partial\") is published on the job as `partial: false` beside `status: \"partial\"`; the partial caveat is printed on the cancel branch and missing on the budget-halt branch.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:a6d9e74af45916cc",
+          "evaluatedRevision": 13
         },
         {
           "subject": "agent-memory",

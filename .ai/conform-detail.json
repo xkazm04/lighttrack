@@ -10354,6 +10354,64 @@
           "evidence": "crates/store/src/sqlite/jobs.rs:127 Recovery writes a distinguishing sentence (JOB_ERROR_WORKER_LOST / RELAY_ERROR_DEVICE_LOST) instead of an indeterminate status. It also silently re-issues metered generation work instead of closing it and reconciling spend. Counting stale_reclaims on its own key (jobs.rs:126) is conformant with the technique's restart-counting rule."
         }
       ]
+    },
+    "a8ab2575-58d9-4252-9a56-6af87205ef60/cross-provider-benchmark-operations": {
+      "context": "runner-worker-pipeline",
+      "subject": "cross-provider-benchmark-operations",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:19:29.199Z",
+      "worker": "296e1f82-dca7-4caa-b5ca-f65937e06ef1",
+      "techniques": [
+        {
+          "technique": "async-run-queue-with-cancel",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/serve_job.rs:50 A watcher thread polls for cancelling/cancelled and raises the flag; the run stops at the next case boundary. A timer heartbeat renews the lease, and retries are charged to `failures`, not `attempts` (serve_job.rs:105)."
+        },
+        {
+          "technique": "axes-and-caveats-live-at-the-surface",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/dispatch.rs:107 The job-surface partial caveat covers only the cancel branch. A budget-halted run's job result says partial:false, which contradicts its own status field."
+        },
+        {
+          "technique": "budget-preflight-and-ceiling",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/cli.rs:38 The `--max-cost` flag (default $25, 0 disables) drives both the pre-flight abort and the live case-boundary ceiling. The halted run is kept as partial, and aggregate_status (util.rs:103) never rolls it up to passed. The estimator itself is in budget.rs, outside this context."
+        },
+        {
+          "technique": "determinism-stamping",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/util.rs:184 Stamps generation and judging separately. The headline is the weaker of the two, and a half that did not happen is null."
+        },
+        {
+          "technique": "dataset-sampling-anonymize-freeze",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/dataset.rs:106 A regex scrub always runs, with an optional LLM pass. Each item records the method, the redaction count and source_event_id, and the dataset is frozen last (dataset.rs:125). Strategies are recent/random/stratified/errors plus dedupe, and unknown spellings are refused."
+        }
+      ]
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/cross-provider-benchmark-operations": {
+      "context": "gateway-proxy",
+      "subject": "cross-provider-benchmark-operations",
+      "bundle": "llm-observability",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T05:19:29.199Z",
+      "techniques": [
+        {
+          "technique": "entitlement-exhaustion-is-not-ill-health",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/config.rs:1 The gateway does classify seat exhaustion separately from transient failure (failover.rs), but for live routing, not for a benchmark matrix."
+        }
+      ],
+      "registryProposal": "The gateway's failover classifier (Exhausted vs Transient, with cooldown driven by retry_after) is a runtime twin of entitlement-exhaustion-is-not-ill-health. A routing subject (model-routing / multi-provider-gateway-plane) may want a sibling technique so the rule is not confined to benchmark operations.",
+      "withdrawn": {
+        "worker": "296e1f82-dca7-4caa-b5ca-f65937e06ef1",
+        "state": "not-applicable",
+        "at": "2026-11-04T05:20:05.420212+00:00",
+        "reason": "reviewer (sonnet): The anchor crates/gateway/src/config.rs:1 is only the routing-config doc header, so it does not show that benchmark operations are absent; the 0-hit search is real but uses narrow terms, and I could not confirm that the golden path places the gateway outside this subject, whose name includes cross-p"
+      }
     }
   }
 }
