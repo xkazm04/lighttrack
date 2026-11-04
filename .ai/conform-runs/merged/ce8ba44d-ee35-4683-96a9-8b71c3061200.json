@@ -1,0 +1,169 @@
+{
+ "schema": "conform-run/1",
+ "worker": "ce8ba44d-ee35-4683-96a9-8b71c3061200",
+ "subject": "federated-benchmark-sharing",
+ "evaluatedAt": "2026-11-04T00:54:34.001433+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "collective-leaderboard",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/collective/ingest.rs:116 The plausibility gate runs on each entry before the fold, and the only check after the fold is the min_cases floor. A payload that spreads a claim across many invented task labels (all clamped to `general`) can therefore store one bucket far above MAX_CASES_PER_ENTRY, up to u32 saturation. That admits exactly the over-ceiling count the gate exists to reject.",
+   "techniques": [
+    {
+     "technique": "hub-ingest-plausibility-gates",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/fold.rs:147 Folded case counts are summed without rechecking the million-case ceiling, so the count ceiling can be bypassed by splitting a claim. Clamp vs reject and malformed vs implausible are otherwise handled correctly (sanitize.rs:56-64). There is also no capture-time floor on generated_at."
+    },
+    {
+     "technique": "cost-bucketing-side-channels",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/sanitize.rs:101 Cost is re-bucketed at the hub (sanitize.rs:100, fold.rs:172). Latency percentiles are continuous measures, yet they pass through at exact millisecond resolution with no bucketing rule and no stated argument why that precision is safe. The technique's sweep-every-continuous-field rule is not met."
+    },
+    {
+     "technique": "k-anonymity-cases-and-sources",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/collective/leaderboard.rs:141 Order is merge, then the source floor, then every user filter, then counts over what survived. held_back is disclosed. The hub re-enforces the case floor at ingest.rs:121, and k comes from hub config, not a request parameter."
+    },
+    {
+     "technique": "fixed-task-vocabulary",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/collective/scorecard.rs:45 Classified at the source and clamped at the hub (sanitize.rs:89), with the clamp disclosed in the ack. Gap: the hint argument is always None, so operators have no per-benchmark tag. This is an accuracy gap, not a closure gap."
+    },
+    {
+     "technique": "aggregate-only-digests",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/scorecard.rs:129 The digest is built from run scorecards and never reads events (digest.rs:95). But the rubric fingerprint hashes a local rubric_id@version, a per-contributor identifier, and ships it. A reader could correlate two digests from one contributor using this field alone."
+    },
+    {
+     "technique": "capture-locally-publish-separately",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/collective/digest.rs:95 Runs are always stored locally. Publication is a separate admin operation that reads the store and applies the floor and bucketing on the way out. A preview via GET /digest is possible, and attempts are recorded in a ledger."
+    },
+    {
+     "technique": "content-addressed-contribution",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/collective/contribute.rs:133 Contributions are POSTed to a hub endpoint that replaces the contributor's set, not proposed as changes to a shared store. The technique's precondition does not hold."
+    }
+   ]
+  },
+  {
+   "context": "collective-intelligence-types",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/collective/types.rs:77 The wire digest carries a contributor-derived, high-cardinality rubric hash. provenance.rs itself calls this a linkage key too sharp to publish, yet it crosses to the hub and is stored there. The hub therefore holds a per-contributor correlation channel finer than anything it publishes.",
+   "techniques": [
+    {
+     "technique": "aggregate-only-digests",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/collective/types.rs:77 This is an identifying input that ships instead of being consumed locally. By contrast, dataset_version is consumed locally (types.rs:43), a single-run variance is None rather than 0 (merge.rs:337), and the schema is additive with MIN_SCHEMA_VERSION=1."
+    },
+    {
+     "technique": "cost-bucketing-side-channels",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/collective/merge.rs:333 Cost is bucketed to 2 significant figures before it leaves (privacy.rs:16, merge.rs:332). Latency percentiles go on the wire at exact resolution with no bucketing rule or argument, so the sweep-every-continuous-field rule is unmet."
+    },
+    {
+     "technique": "k-anonymity-cases-and-sources",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/merge.rs:323 Sub-floor buckets are dropped, not flagged, and the number withheld is counted. low_confidence is a separate display flag."
+    },
+    {
+     "technique": "fixed-task-vocabulary",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/vocab.rs:47 The classifier is total and defaults to general (classify.rs:48). Every wire enum is clamped, and WIRE_CATEGORICALS is checked against the schema by a test."
+    },
+    {
+     "technique": "bounded-contributor-influence",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/merge.rs:364 The top source is winsorized at 0.8, single-source rows are left untouched, and the spread uses the same weights (merge.rs:400). max_source_share and the raw n_cases are both disclosed."
+    },
+    {
+     "technique": "hub-ingest-plausibility-gates",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/aliases.rs:83 This context supplies the alias normalization and the vocabulary clamps. The gate itself lives in the API context."
+    },
+    {
+     "technique": "content-addressed-contribution",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/collective/contribution.rs:123 The hash gates re-POSTs to an endpoint. There is no proposed-change transport."
+    }
+   ]
+  },
+  {
+   "context": "firestore-eval-collective",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/src/collective.rs:97 At consumption, the Firestore decoder repairs a missing or mistyped quality, pass_rate, cost or count into 0 instead of skipping and warning. The resulting zero-case phantom still counts toward n_contributors. Meanwhile a missing string or timestamp aborts the whole collect, so one bad document fails the leaderboard read for every reader.",
+   "techniques": [
+    {
+     "technique": "strict-ingestion-lenient-consumption",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/collective.rs:122 Both consumption failure modes the technique names are present: zeros substituted into numeric fields (line 97), and a hard failure through collect::<Result> (lines 121-123). Neither skips with a warning."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-04T00:54:34.001433+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "aggregate-only-digests",
+    "capture-locally-publish-separately",
+    "content-addressed-contribution",
+    "cost-bucketing-side-channels",
+    "fixed-task-vocabulary",
+    "hub-ingest-plausibility-gates",
+    "k-anonymity-cases-and-sources"
+   ],
+   "deviations": 1,
+   "context": "collective-leaderboard",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T00:54:34.001433+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "aggregate-only-digests",
+    "bounded-contributor-influence",
+    "content-addressed-contribution",
+    "cost-bucketing-side-channels",
+    "fixed-task-vocabulary",
+    "hub-ingest-plausibility-gates",
+    "k-anonymity-cases-and-sources"
+   ],
+   "deviations": 1,
+   "context": "collective-intelligence-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T00:54:34.001433+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "strict-ingestion-lenient-consumption"
+   ],
+   "deviations": 1,
+   "context": "firestore-eval-collective",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -1955,12 +1955,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/core/src/collective/types.rs:77 The wire digest carries a contributor-chosen, high-cardinality rubric hash. provenance.rs:9-16 calls this hash a linkage key and refuses to publish it, yet it still crosses to the hub, where it is stored per contributor and backs the `?rubric=` membership filter. The hub ends up holding a correlation channel finer than anything it publishes.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:1bb6a4d8f620f867",
-          "evaluatedRevision": 11,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/collective/types.rs:77 The wire digest carries a contributor-derived, high-cardinality rubric hash. provenance.rs itself calls this a linkage key too sharp to publish, yet it crosses to the hub and is stored there. The hub therefore holds a per-contributor correlation channel finer than anything it publishes.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:9ba72fc97cd5044b",
+          "evaluatedRevision": 12,
+          "revisionsBehind": 1
         }
       ],
       "governance": "governed"
@@ -1999,9 +1998,10 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/api/src/collective/fold.rs:147 Duplicate buckets are summed after individual plausibility checks without rechecking the combined count, allowing a stored bucket to exceed the million-case ceiling.",
-          "evaluatedAt": "2026-10-13",
-          "stale": true
+          "evidence": "crates/api/src/collective/ingest.rs:116 The plausibility gate runs on each entry before the fold, and the only check after the fold is the min_cases floor. A payload that spreads a claim across many invented task labels (all clamped to `general`) can therefore store one bucket far above MAX_CASES_PER_ENTRY, up to u32 saturation. That admits exactly the over-ceiling count the gate exists to reject.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:9ba72fc97cd5044b",
+          "evaluatedRevision": 12
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -3949,13 +3949,12 @@
           "changedAt": "2026-10-25",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/store-firestore/src/collective.rs:97 When a stored quality, pass_rate, cost or count is missing or mistyped, the Firestore decoder substitutes 0 instead of skipping the entry with a warning. A zero-case phantom still counts toward n_contributors in the merge. Meanwhile a missing string or timestamp makes list() abort through collect::<Result>, so one bad document takes down the whole leaderboard read for every reader.",
-          "evaluatedAt": "2026-10-24",
-          "evaluatedAgainst": "sha256-b2:1bb6a4d8f620f867",
-          "evaluatedRevision": 11,
+          "evidence": "crates/store-firestore/src/collective.rs:97 At consumption, the Firestore decoder repairs a missing or mistyped quality, pass_rate, cost or count into 0 instead of skipping and warning. The resulting zero-case phantom still counts toward n_contributors. Meanwhile a missing string or timestamp aborts the whole collect, so one bad document fails the leaderboard read for every reader.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:9ba72fc97cd5044b",
+          "evaluatedRevision": 12,
           "source": "retained",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "alerting",
