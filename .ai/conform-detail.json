@@ -9888,6 +9888,56 @@
       "evaluatedTs": "2026-11-04T03:48:40.680Z",
       "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
       "techniques": []
+    },
+    "70358003-cc4e-4553-ba3c-e864f30850d1/agent-memory": {
+      "context": "judge-and-scoring",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:17:49.171Z",
+      "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+      "techniques": []
+    },
+    "b17dade9-c8d8-4e0c-9ca0-d782694902e4/agent-memory": {
+      "context": "store-conformance-observability",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:17:49.171Z",
+      "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+      "techniques": []
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/agent-memory": {
+      "context": "evaluation-rendering",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:17:49.171Z",
+      "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+      "techniques": []
+    },
+    "060b7649-5405-4f72-ac96-572409e6039d/agent-memory": {
+      "context": "evaluation-scoring-types",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:17:49.171Z",
+      "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+      "techniques": []
+    },
+    "ae7d2e99-8b0f-49f5-83c9-138d65df5241/agent-memory": {
+      "context": "event-ingest",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:17:49.171Z",
+      "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+      "techniques": []
     }
   }
 }

@@ -1,0 +1,143 @@
+{
+ "schema": "conform-run/1",
+ "worker": "5c0c700a-e738-41c0-9fbf-bc2ee6e870c9",
+ "subject": "agent-memory",
+ "evaluatedAt": "2026-11-04T04:17:49.171570+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "judge-and-scoring",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/engine/src/judge.rs:1 The judge scores each sample in a stateless structured-generation call and keeps nothing between sessions; searching crates/engine/src and crates/engine/tests for episodic/consolidat/recall/half_life/agent_memory found nothing, and the only 'memory' hits are Docker memory limits and response-buffer bounds, so there is no agent memory pipeline for the subject to govern.",
+   "techniques": [],
+   "absenceTerms": [
+    "episodic",
+    "consolidat",
+    "recall",
+    "half_life"
+   ]
+  },
+  {
+   "context": "store-conformance-observability",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/conformance/mod.rs:1 This is a backend-parity test harness for telemetry and scoring tables, not a store an agent carries forward; the search for episodic/consolidat/recall/half_life/agent_memory over crates/store/src found nothing, and 'memory' shows up only as 'in-memory SQLite' and in a comment about holding rows in a process.",
+   "techniques": [],
+   "absenceTerms": [
+    "episodic",
+    "consolidat",
+    "recall",
+    "half_life"
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/render/src/benchmarks.rs:1 The render crate turns API JSON into Markdown tables and keeps no state; the search for episodic/consolidat/recall/half_life/agent_memory, and also 'memory', over crates/render found nothing, so there is no memory capture, consolidation or recall to judge.",
+   "techniques": [],
+   "absenceTerms": [
+    "episodic",
+    "consolidat",
+    "recall",
+    "half_life"
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/core/src/calibration.rs:1 These are evaluation data types (rubrics, scores, calibration, jobs, leases); rubric `supersedes` is version lineage, not belief supersedence. The search for episodic/consolidat/recall/half_life/agent_memory over crates/core found nothing, so no agent memory layer exists here.",
+   "techniques": [],
+   "absenceTerms": [
+    "episodic",
+    "consolidat",
+    "recall",
+    "half_life"
+   ]
+  },
+  {
+   "context": "event-ingest",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/src/events.rs:1 This context ingests and queries LLM call telemetry for operators and never feeds stored items back into an agent's context; the search for episodic/consolidat/recall/half_life/agent_memory over crates/api found nothing, so the subject's precondition (an agent carrying memory forward) does not hold.",
+   "techniques": [],
+   "absenceTerms": [
+    "episodic",
+    "consolidat",
+    "recall",
+    "half_life"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-04T04:17:49.171570+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "judge-and-scoring",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:17:49.171570+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "store-conformance-observability",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:17:49.171570+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:17:49.171570+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:17:49.171570+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "event-ingest",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -3296,8 +3296,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/render/src/benchmarks.rs:1 The render crate turns API JSON into Markdown tables and keeps no state; the search for episodic/consolidat/recall/half_life/agent_memory, and also 'memory', over crates/render found nothing, so there is no memory capture, consolidation or recall to judge.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "voice-io",
@@ -3482,8 +3486,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/core/src/calibration.rs:1 These are evaluation data types (rubrics, scores, calibration, jobs, leases); rubric `supersedes` is version lineage, not belief supersedence. The search for episodic/consolidat/recall/half_life/agent_memory over crates/core found nothing, so no agent memory layer exists here.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "quality-gates",
@@ -3641,8 +3649,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/api/src/events.rs:1 This context ingests and queries LLM call telemetry for operators and never feeds stored items back into an agent's context; the search for episodic/consolidat/recall/half_life/agent_memory over crates/api found nothing, so the subject's precondition (an agent carrying memory forward) does not hold.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "trace-rollup-and-attribution",
@@ -4333,8 +4345,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/engine/src/judge.rs:1 The judge scores each sample in a stateless structured-generation call and keeps nothing between sessions; searching crates/engine/src and crates/engine/tests for episodic/consolidat/recall/half_life/agent_memory found nothing, and the only 'memory' hits are Docker memory limits and response-buffer bounds, so there is no agent memory pipeline for the subject to govern.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "production-trace-scoring",
@@ -7797,8 +7813,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/conformance/mod.rs:1 This is a backend-parity test harness for telemetry and scoring tables, not a store an agent carries forward; the search for episodic/consolidat/recall/half_life/agent_memory over crates/store/src found nothing, and 'memory' shows up only as 'in-memory SQLite' and in a comment about holding rows in a process.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "eval-harness",
