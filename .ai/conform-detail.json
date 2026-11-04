@@ -9070,6 +9070,32 @@
         "at": "2026-11-03T23:59:28.208996+00:00",
         "reason": "reviewer (sonnet): The anchor revenue.rs:202 is only a JSON-path match, so it doesn't show that prompt handling is absent. The same sqlite directory has prompts.rs, which stores prompts and prompt versions, and it is not among the context files. The searched terms (compaction, system_prompt, render_prompt, context_win"
       }
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/eval-harness": {
+      "context": "provider-generation",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T00:19:41.008Z",
+      "worker": "09981e73-c101-4715-ad9d-31dee9cf618f",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/anthropic_api.rs:69 Tier aliases resolve through a local roster table to undated ids instead of being pinned to a concrete dated identifier. Mitigations exist but do not close the gap: the response's `model` is stamped (anthropic_api.rs:213), and own-family preference is controlled by same_family (family.rs:30)."
+        },
+        {
+          "technique": "assertion-vs-judgment",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/lib.rs:347 An unparseable judge sample is dropped rather than scored zero, and all-failed returns an error rather than a phantom zero, so error stays a separate verdict. Deterministic scorers are reported as model \"deterministic\"."
+        },
+        {
+          "technique": "eval-economics",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/pool.rs:12 Fan-out goes through a bounded worker pool with declared `jobs`, and results come back in index order rather than completion order. Retry is bounded by MAX_TRIES and CALL_BUDGET in retry.rs. The provider_boundary test drives the real path against a loopback stub."
+        }
+      ]
     }
   }
 }

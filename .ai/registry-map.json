@@ -5678,7 +5678,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/anthropic_api.rs:69 The judge/candidate pin for the default spec (`opus@xhigh`) goes through a first-party tier-alias roster (`opus` -> an undated id), so a routine roster edit silently swaps the instrument; judge-stability calls this case out by name, and stamping the response's `model` only partly mitigates it.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "cross-provider-benchmark-operations",
