@@ -7508,12 +7508,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/api/src/schedule_sweep.rs:63 Recurring background loops are spawned as unowned, detached tasks without registering through a central supervisor door, retaining no stop handle, and participating in no graceful shutdown drain.",
-          "evaluatedAt": "2026-10-17",
-          "evaluatedAgainst": "sha256-b2:22ed2a99172ae050",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/src/schedule_sweep.rs:66 The schedule sweep (and the storage maintenance sweep at crates/api/src/storage.rs:295) is a detached tokio task whose JoinHandle is dropped: there is no registration door, no roster, no stop handle and no graceful drain. A panic in the async tick body silently ends the loop, with nothing on the health surface to show it.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:e3e7a428140a2fbb",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "embedded-db",

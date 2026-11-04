@@ -1,0 +1,95 @@
+{
+ "schema": "conform-run/1",
+ "worker": "2bf7798b-1b8c-4b2e-81e7-252fad0d852e",
+ "subject": "background-jobs",
+ "evaluatedAt": "2026-11-04T05:31:43.386705+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "storage-and-jobs",
+   "subject": "background-jobs",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/schedule_sweep.rs:66 The schedule sweep (and the storage maintenance sweep at crates/api/src/storage.rs:295) is a detached tokio task whose JoinHandle is dropped: there is no registration door, no roster, no stop handle and no graceful drain. A panic in the async tick body silently ends the loop, with nothing on the health surface to show it.",
+   "techniques": [
+    {
+     "technique": "loop-supervision",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/schedule_sweep.rs:66 Detached spawn, JoinHandle discarded; main.rs:528-548 arms five such loops independently (ad-hoc timer swarm), and axum::serve has no graceful-shutdown drain or supervisor stop sequence."
+    },
+    {
+     "technique": "tick-isolation",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/schedule_sweep.rs:81 The tick body runs with no crash barrier (catch_unwind / a supervised JoinHandle) and no per-tick deadline, so a panic kills the loop silently and a hung store call wedges it. There is no consecutive-failure backoff or quarantine. Per-schedule errors are caught, and the sequential await means ticks cannot re-enter."
+    },
+    {
+     "technique": "loop-health-telemetry",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/schedule_sweep.rs:117 The schedule sweep writes no per-tick snapshot: it emits a log line only when it fired, so 'ran and found nothing' and 'did not run' look identical. health.rs has no loop liveness. The storage sweep does better, with a bounded flight-recorder ring of ran/nothing_to_do/deferred/failed outcomes at storage.rs:265, but the subject requires this of every loop."
+    },
+    {
+     "technique": "problem-set-change-logging",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/schedule_sweep.rs:112 A schedule whose fire() errors before save() keeps an overdue next_due, so the same warning is written every 60s tick for as long as the fault stands. There is no previous-set diff."
+    },
+    {
+     "technique": "adaptive-cadence",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/schedule_sweep.rs:68 Fixed-delay rather than catch-up burst, and the interval is floored by MIN_SECS where it is parsed (line 51). The storage loop's activity-gauge gate makes its work state-dependent. Missing: jitter and a dual active/idle rate, both minor at a 60s cadence."
+    },
+    {
+     "technique": "startup-sweeps",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/schedule_migrate.rs:9 The idempotent migration runs before the first sweep. Overdue schedules collapse to one firing via advance_from(now). Orphaned running jobs are reclaimed by lease staleness (jobs.rs:108) on the same path the steady state uses. Weak spots: catch-up firings are not attributed as sweep-driven, and the migration is uncapped."
+    },
+    {
+     "technique": "job-progress-and-cancellation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:128 Jobs are keyed by id. Cancel works in two steps (cancelling \u2192 cancelled), cooperatively at case boundaries with partial results marked. Terminal states are distinct, a finished job returns 409, and get_job gives a snapshot. Progress is a free-form string rather than a declared done/total unit."
+    },
+    {
+     "technique": "timeout-is-a-status-not-a-consumption",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:108 This context has no bounded wait on a tracked operation. Claim is a non-blocking poll, and the stale window is a lease-detection bound, not a collector's wait budget."
+    },
+    {
+     "technique": "first-tick-gates-readiness",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/storage.rs:297 These loops do housekeeping (maintenance, schedule firing). Their first output is incidental, and they are not the only writer of state that readers need."
+    },
+    {
+     "technique": "failed-start-kept-and-retried-at-cadence",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/schedule_migrate.rs:21 Loop start is infallible (a spawn), and startup work deliberately never fails the start, so there is no failed-start state to keep."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-04T05:31:43.386705+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "background-jobs"
+   ],
+   "techniques": [
+    "adaptive-cadence",
+    "failed-start-kept-and-retried-at-cadence",
+    "first-tick-gates-readiness",
+    "job-progress-and-cancellation",
+    "loop-health-telemetry",
+    "loop-supervision",
+    "problem-set-change-logging",
+    "startup-sweeps",
+    "tick-isolation",
+    "timeout-is-a-status-not-a-consumption"
+   ],
+   "deviations": 1,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
