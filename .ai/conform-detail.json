@@ -9984,6 +9984,125 @@
         "at": "2026-11-04T04:31:22.940284+00:00",
         "reason": "reviewer (sonnet): The cli.rs:24 anchor is the `claude_bin` option doc and shows no metered-billing flag, and grep of cli.rs finds no 'meter', so that claim is unconfirmed; the 'no descent reason' claim is also overstated, because serve.rs:55 prints the probe's failure reason."
       }
+    },
+    "63f1effb-3b78-42d8-a886-ff2a1458311f/quality-gates": {
+      "context": "runner-benchmark-calibration",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:45:09.631Z",
+      "worker": "557b3b86-88e9-4ffb-b1c5-4df999b7a9f8",
+      "techniques": [
+        {
+          "technique": "gate-liveness",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/calibrate_watch.rs:140 Instrument failure falls through to exit 0 in `--once` mode (lines 134-149). The daemon's continue-on-error is reasonable; the one-shot exit path is not."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/calibrate.rs:248 When every item is skipped (unparseable judge output), agreement over 0 pairs yields κ=0/untrusted, and that result is persisted as a measurement and becomes the next drift baseline instead of the assessment being refused. Relatedly, Budget::spend (budget.rs:136) drops unknown cost from the live ceiling, which contradicts case_spend.rs's 'an unknown is never a zero'."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/calibrate_watch.rs:30 The untrusted verdict is wired to a distinct non-zero exit code (used at line 147), not just printed."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/calibrate.rs:70 Refusals name the flag-level remedy the reader can run."
+        }
+      ]
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/quality-gates": {
+      "context": "api-integration-tests",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:45:09.631Z",
+      "worker": "557b3b86-88e9-4ffb-b1c5-4df999b7a9f8",
+      "techniques": [
+        {
+          "technique": "waiver-names-its-finding",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:102 A single unnamed override reaches every finding class; the trust exclusion only partly realises the 'unwaivable classes' rule."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:122 A missing value fails closed rather than passing a naive comparison."
+        },
+        {
+          "technique": "false-positive-economics",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:129 The gate was narrowed to be significance-aware rather than deleted."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:115 Seeded known-bad inputs prove the gate goes red."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:251 The gate reads the resolved version rather than the self-declared provenance tag."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:225 Debt-shaped advisory with a stated promotion trigger ('for one release')."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:230 The test asserts that the message names the remedy."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_capabilities.rs:127 The published refused-routes projection is checked against the single endpoint enumeration."
+        }
+      ]
+    },
+    "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/quality-gates": {
+      "context": "api-endpoint-table",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T04:45:09.631Z",
+      "worker": "557b3b86-88e9-4ffb-b1c5-4df999b7a9f8",
+      "techniques": [
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "deviation",
+          "evidence": "crates/contract/src/endpoints/jobs_tests.rs:18 A hand-written expectation list can't see a variant nothing addresses (same shape at scores.rs:119 and alerts.rs). The contract crate deliberately has no core dependency, and the API binds only Scope back to core, not these enums."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/mod.rs:29 One enumeration feeds OpenAPI, MCP, the CLI, the renderer and the access matrix."
+        },
+        {
+          "technique": "chokepoint-tag-registry",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/mod.rs:5 There is a registry row per route, held to the router by bijection tests (in crates/api)."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/benchmarks.rs:163 The evidence-writing door is fenced off from agents (machine-only, no MCP tool)."
+        },
+        {
+          "technique": "waiver-names-its-finding",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/alerts.rs:96 The reachability exemption (`machine: true`) sits on the individual row with its reason beside it, scoped to one finding, not a test allowlist."
+        }
+      ],
+      "registryProposal": "match-the-resolved-artifact could address the case where the table crate is deliberately dependency-isolated from the enum it mirrors: the binding test then has to live in a crate that links both, and the technique should say so."
     }
   }
 }

@@ -1,0 +1,193 @@
+{
+ "schema": "conform-run/1",
+ "worker": "557b3b86-88e9-4ffb-b1c5-4df999b7a9f8",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-11-04T04:45:09.631041+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/calibrate_watch.rs:140 In `--once` mode (documented for cron/CI to fail on exit 5), a failed cycle leaves `last` at its initial `DriftLevel::Ok`, so the run exits 0. The sentinel reports clean when it measured nothing.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibrate_watch.rs:140 Instrument failure falls through to exit 0 in `--once` mode (lines 134-149). The daemon's continue-on-error is reasonable; the one-shot exit path is not."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibrate.rs:248 When every item is skipped (unparseable judge output), agreement over 0 pairs yields \u03ba=0/untrusted, and that result is persisted as a measurement and becomes the next drift baseline instead of the assessment being refused. Relatedly, Budget::spend (budget.rs:136) drops unknown cost from the live ceiling, which contradicts case_spend.rs's 'an unknown is never a zero'."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/calibrate_watch.rs:30 The untrusted verdict is wired to a distinct non-zero exit code (used at line 147), not just printed."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/calibrate.rs:70 Refusals name the flag-level remedy the reader can run."
+    }
+   ]
+  },
+  {
+   "context": "api-integration-tests",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/tests_prompt_gate.rs:102 The suite pins `force=true` as a blanket waiver that clears every promotion refusal (regression, unscored, incomplete run, unresolved prompt version) without naming which finding is waived; only the judge-trust refusal is held back.",
+   "techniques": [
+    {
+     "technique": "waiver-names-its-finding",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:102 A single unnamed override reaches every finding class; the trust exclusion only partly realises the 'unwaivable classes' rule."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:122 A missing value fails closed rather than passing a naive comparison."
+    },
+    {
+     "technique": "false-positive-economics",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:129 The gate was narrowed to be significance-aware rather than deleted."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:115 Seeded known-bad inputs prove the gate goes red."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:251 The gate reads the resolved version rather than the self-declared provenance tag."
+    },
+    {
+     "technique": "blocking-by-input-determinism",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:225 Debt-shaped advisory with a stated promotion trigger ('for one release')."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_prompt_gate.rs:230 The test asserts that the message names the remedy."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/tests_capabilities.rs:127 The published refused-routes projection is checked against the single endpoint enumeration."
+    }
+   ]
+  },
+  {
+   "context": "api-endpoint-table",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/contract/src/endpoints/jobs_tests.rs:18 Each 'names every JobKind/ScoreKind/AlertKind' test compares the row's enum_values against a hand-written literal list in the same crate, and no test anywhere binds them to the core enums, so a new variant leaves every test green while the contract tells agents the value is illegal.",
+   "techniques": [
+    {
+     "technique": "match-the-resolved-artifact",
+     "verdict": "deviation",
+     "evidence": "crates/contract/src/endpoints/jobs_tests.rs:18 A hand-written expectation list can't see a variant nothing addresses (same shape at scores.rs:119 and alerts.rs). The contract crate deliberately has no core dependency, and the API binds only Scope back to core, not these enums."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/mod.rs:29 One enumeration feeds OpenAPI, MCP, the CLI, the renderer and the access matrix."
+    },
+    {
+     "technique": "chokepoint-tag-registry",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/mod.rs:5 There is a registry row per route, held to the router by bijection tests (in crates/api)."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/benchmarks.rs:163 The evidence-writing door is fenced off from agents (machine-only, no MCP tool)."
+    },
+    {
+     "technique": "waiver-names-its-finding",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/alerts.rs:96 The reachability exemption (`machine: true`) sits on the individual row with its reason beside it, scoped to one finding, not a test allowlist."
+    }
+   ],
+   "registryProposal": "match-the-resolved-artifact could address the case where the table crate is deliberately dependency-isolated from the enum it mirrors: the binding test then has to live in a crate that links both, and the technique should say so."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "quality-gates",
+   "context": "store-integration-tests",
+   "reason": "evidence leans on Architect/strong-patterns.md, which is not a tracked file"
+  },
+  {
+   "subject": "quality-gates",
+   "context": "pg-evaluation-store",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T04:45:09.631041+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:45:09.631041+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "blocking-by-input-determinism",
+    "false-positive-economics",
+    "gate-liveness",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs",
+    "unmeasurable-criteria",
+    "waiver-names-its-finding"
+   ],
+   "deviations": 1,
+   "context": "api-integration-tests",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T04:45:09.631041+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "chokepoint-tag-registry",
+    "match-the-resolved-artifact",
+    "policy-projection",
+    "self-reported-gate-inputs",
+    "waiver-names-its-finding"
+   ],
+   "deviations": 1,
+   "context": "api-endpoint-table",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

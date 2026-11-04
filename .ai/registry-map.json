@@ -901,7 +901,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/contract/src/endpoints/jobs_tests.rs:18 Each 'names every JobKind/ScoreKind/AlertKind' test compares the row's enum_values against a hand-written literal list in the same crate, and no test anywhere binds them to the core enums, so a new variant leaves every test green while the contract tells agents the value is illegal.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         }
       ],
       "governance": "governed"
@@ -1100,7 +1104,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_prompt_gate.rs:102 The suite pins `force=true` as a blanket waiver that clears every promotion refusal (regression, unscored, incomplete run, unresolved prompt version) without naming which finding is waived; only the judge-trust refusal is held back.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         }
       ],
       "governance": "governed"
@@ -6392,7 +6400,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/calibrate_watch.rs:140 In `--once` mode (documented for cron/CI to fail on exit 5), a failed cycle leaves `last` at its initial `DriftLevel::Ok`, so the run exits 0. The sentinel reports clean when it measured nothing.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "test-harness",
