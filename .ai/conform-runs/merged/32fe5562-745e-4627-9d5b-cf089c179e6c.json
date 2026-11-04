@@ -1,0 +1,47 @@
+{
+ "schema": "conform-run/1",
+ "worker": "32fe5562-745e-4627-9d5b-cf089c179e6c",
+ "subject": "agent-cli-transport",
+ "evaluatedAt": "2026-11-04T05:25:13.598717+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-worker-pipeline",
+   "subject": "agent-cli-transport",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/serve.rs:50 The serve worker probes the CLI once and only prints the result. Neither a missing install nor unknown auth narrows the kinds or providers it declares, and the API treats providers as advisory, so a worker without claude still leases claude -p jobs and fails them.",
+   "techniques": [
+    {
+     "technique": "availability-probe",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/serve.rs:51 Only `installed` is consulted, and only to pick stdout or stderr for the banner. The probe result never feeds the claim (providers_from_env derives capability from API-key env vars alone), so the probe does not prevent the paid or failed lease it exists to prevent."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-cli-transport",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/audit.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T05:25:13.598717+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-cli-transport"
+   ],
+   "techniques": [
+    "availability-probe"
+   ],
+   "deviations": 1,
+   "context": "runner-worker-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -6798,7 +6798,11 @@
           "revision": 10,
           "changedAt": "2026-10-27",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/serve.rs:50 The serve worker probes the CLI once and only prints the result. Neither a missing install nor unknown auth narrows the kinds or providers it declares, and the API treats providers as advisory, so a worker without claude still leases claude -p jobs and fails them.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:75415727a875a42a",
+          "evaluatedRevision": 10
         },
         {
           "subject": "cross-provider-benchmark-operations",

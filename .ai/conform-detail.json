@@ -9953,37 +9953,35 @@
       "context": "runner-worker-pipeline",
       "subject": "agent-cli-transport",
       "bundle": "software-engineering",
-      "state": "unknown",
+      "state": "deviation",
       "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T04:30:54.862Z",
+      "evaluatedTs": "2026-11-04T05:25:13.598Z",
+      "worker": "32fe5562-745e-4627-9d5b-cf089c179e6c",
       "techniques": [
+        {
+          "technique": "availability-probe",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/serve.rs:51 Only `installed` is consulted, and only to pick stdout or stderr for the banner. The probe result never feeds the claim (providers_from_env derives capability from API-key env vars alone), so the probe does not prevent the paid or failed lease it exists to prevent."
+        },
         {
           "technique": "fallback-ladder",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/serve.rs:55 The probe result does not narrow the claim (serve.rs:77 passes p.kinds unchanged). There is no recorded descent reason and no labeled lower rung."
+          "evidence": "crates/runner/src/serve.rs:55 The probe result does not narrow the claim (serve.rs:77 passes p.kinds unchanged). There is no recorded descent reason and no labeled lower rung.",
+          "carriedFrom": "2026-11-04"
         },
         {
           "technique": "output-normalization",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/dataset.rs:246 An empty answer from the LLM anonymization pass is silently ignored and the regex-only output is returned as if the pass ran. The empty answer should be a named failure or a labeled fallback."
-        },
-        {
-          "technique": "availability-probe",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/serve.rs:52 The worker's startup readiness line repeats the engine probe's file-presence 'credentials found' as a healthy banner. That is the confident-yes-from-unknown the technique warns about."
+          "evidence": "crates/runner/src/dataset.rs:246 An empty answer from the LLM anonymization pass is silently ignored and the regex-only output is returned as if the pass ran. The empty answer should be a named failure or a labeled fallback.",
+          "carriedFrom": "2026-11-04"
         },
         {
           "technique": "subscription-auth-selection",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/cli.rs:24 Metered billing is an explicit operator flag passed to the engine's single door, not something inherited from the environment."
+          "evidence": "crates/runner/src/cli.rs:24 Metered billing is an explicit operator flag passed to the engine's single door, not something inherited from the environment.",
+          "carriedFrom": "2026-11-04"
         }
-      ],
-      "withdrawn": {
-        "worker": "e8e0b7ea-301e-4caa-a488-5ec9492de84c",
-        "state": "deviation",
-        "at": "2026-11-04T04:31:22.940284+00:00",
-        "reason": "reviewer (sonnet): The cli.rs:24 anchor is the `claude_bin` option doc and shows no metered-billing flag, and grep of cli.rs finds no 'meter', so that claim is unconfirmed; the 'no descent reason' claim is also overstated, because serve.rs:55 prints the probe's failure reason."
-      }
+      ]
     },
     "63f1effb-3b78-42d8-a886-ff2a1458311f/quality-gates": {
       "context": "runner-benchmark-calibration",
