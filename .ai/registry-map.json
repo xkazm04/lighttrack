@@ -4770,8 +4770,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/render/src/lib.rs:3 The render crate is a stateless JSON-to-Markdown formatter with no memory store or recall path: a grep of crates/render for belief/distill/agent_memory/episodic/memory_store found nothing.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "prompt-assembly",
@@ -7783,8 +7787,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/conformance/driver.rs:11 The conformance driver checks Store-trait surfaces (admission, pricing, jobs, relay, tenancy and others), and none of them is an agent-memory pipeline: a case-insensitive grep of crates/store/src/conformance for belief/distill/agent_memory/episodic/memory_store found nothing, and 'memory' appears only as SQLite open_in_memory.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "embedded-db",
@@ -8057,8 +8065,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/schema/tables/mod.rs:21 The schema's table inventory (ingest, eval, ops, registry) declares no memory, belief or episode table: a grep of crates/store/src/schema for belief/distill/agent_memory/episodic/memory_store found nothing.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "mcp-tools",
@@ -8199,8 +8211,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "clients/typescript/src/index.ts:2 The SDK only ingests telemetry, and its journal is a crash-surviving send buffer, not agent memory: a grep of clients/typescript (node_modules included) for belief/distill/agent_memory/episodic/memory_store found nothing.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "agent-runtime-assembly",

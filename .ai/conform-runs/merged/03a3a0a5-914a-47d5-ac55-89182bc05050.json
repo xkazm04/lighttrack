@@ -1,0 +1,199 @@
+{
+ "schema": "conform-run/1",
+ "worker": "03a3a0a5-914a-47d5-ac55-89182bc05050",
+ "subject": "agent-memory",
+ "evaluatedAt": "2026-11-04T22:22:34.084053+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "store-conformance-governance",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/conformance/driver.rs:11 The conformance driver checks Store-trait surfaces (admission, pricing, jobs, relay, tenancy and others), and none of them is an agent-memory pipeline: a case-insensitive grep of crates/store/src/conformance for belief/distill/agent_memory/episodic/memory_store found nothing, and 'memory' appears only as SQLite open_in_memory.",
+   "techniques": [
+    {
+     "technique": "working-memory",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/conformance/driver.rs:11 none of these surfaces holds agent operative state"
+    },
+    {
+     "technique": "episodic-capture",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/conformance/driver.rs:11 the events surface is LLM telemetry ingest, not agent episodes"
+    },
+    {
+     "technique": "consolidation",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/conformance/driver.rs:11 there is no store of distilled beliefs"
+    }
+   ],
+   "absenceTerms": [
+    "belief",
+    "distill",
+    "episodic"
+   ]
+  },
+  {
+   "context": "store-schema-definition",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/schema/tables/mod.rs:21 The schema's table inventory (ingest, eval, ops, registry) declares no memory, belief or episode table: a grep of crates/store/src/schema for belief/distill/agent_memory/episodic/memory_store found nothing.",
+   "techniques": [
+    {
+     "technique": "consolidation",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/tables/mod.rs:21 no table for consolidated beliefs"
+    },
+    {
+     "technique": "pending-beliefs-live-apart",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/tables/mod.rs:21 no store for proposed or unconfirmed beliefs"
+    },
+    {
+     "technique": "lane-reconciliation",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/tables/mod.rs:21 no memory record with search-index lanes"
+    }
+   ],
+   "absenceTerms": [
+    "belief",
+    "distill",
+    "episodic"
+   ]
+  },
+  {
+   "context": "typescript-sdk",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "clients/typescript/src/index.ts:2 The SDK only ingests telemetry, and its journal is a crash-surviving send buffer, not agent memory: a grep of clients/typescript (node_modules included) for belief/distill/agent_memory/episodic/memory_store found nothing.",
+   "techniques": [
+    {
+     "technique": "episodic-capture",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:2 it captures call telemetry, not agent episodes"
+    },
+    {
+     "technique": "durable-store-failure-posture",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:2 the journal is an outbound send queue, not a memory store that an agent reads"
+    },
+    {
+     "technique": "recall-injection",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:2 nothing is recalled into a prompt"
+    }
+   ],
+   "absenceTerms": [
+    "belief",
+    "distill",
+    "episodic"
+   ]
+  },
+  {
+   "context": "observability-rendering",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/render/src/lib.rs:3 The render crate is a stateless JSON-to-Markdown formatter with no memory store or recall path: a grep of crates/render for belief/distill/agent_memory/episodic/memory_store found nothing.",
+   "techniques": [
+    {
+     "technique": "recall-injection",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/lib.rs:3 it formats API responses and does not inject memory into an agent"
+    },
+    {
+     "technique": "working-memory",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/lib.rs:3 pure string work that carries no state"
+    },
+    {
+     "technique": "loss-site-inventory",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/lib.rs:3 no memory store is read through several windowed paths"
+    }
+   ],
+   "absenceTerms": [
+    "belief",
+    "distill",
+    "episodic"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-memory",
+   "context": "core-observability-types",
+   "reason": "evidence leans on limits/backtest.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T22:22:34.084053+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "consolidation",
+    "episodic-capture",
+    "working-memory"
+   ],
+   "deviations": 0,
+   "context": "store-conformance-governance",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T22:22:34.084053+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "consolidation",
+    "lane-reconciliation",
+    "pending-beliefs-live-apart"
+   ],
+   "deviations": 0,
+   "context": "store-schema-definition",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T22:22:34.084053+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "durable-store-failure-posture",
+    "episodic-capture",
+    "recall-injection"
+   ],
+   "deviations": 0,
+   "context": "typescript-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T22:22:34.084053+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "loss-site-inventory",
+    "recall-injection",
+    "working-memory"
+   ],
+   "deviations": 0,
+   "context": "observability-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
