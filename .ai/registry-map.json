@@ -2891,7 +2891,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/margin_policy.rs:256 Margin guardrails create Throttle/Block rules from MarginRow, which drops CostByDimension.unpriced_calls (margin.rs:57-62 says such a cost is only a floor). An unpriced customer's understated cost is therefore enforced on as if it were complete, so a hole in the price book reads as compliance.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         }
       ],
       "governance": "governed"
@@ -3934,7 +3938,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/tests/conformance.rs:3 The Firestore conformance test sends could-not-run to pass in every context, including the required CI job whose green authorizes a merge. If that job's env var is ever dropped or misspelled, the required check stays green having tested nothing, and there is no require-switch to make the skip fatal there.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "breach-alerting-and-attribution",
@@ -6555,7 +6563,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/gate.rs:20 The `--gate` exit-code map sends every unrecognised status, including an empty string (pinned by the test at gate.rs:39), to exit 0, so any status not in today's closed list reads as a green build. That is could-not-run folded into pass, on the path whose green authorizes a merge.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "scoring-rubrics",

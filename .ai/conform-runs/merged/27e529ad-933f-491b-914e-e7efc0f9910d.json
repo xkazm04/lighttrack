@@ -1,0 +1,168 @@
+{
+ "schema": "conform-run/1",
+ "worker": "27e529ad-933f-491b-914e-e7efc0f9910d",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-11-04T03:07:05.036480+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-scoring-engine",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/gate.rs:20 The `--gate` exit-code map sends every unrecognised status, including an empty string (pinned by the test at gate.rs:39), to exit 0, so any status not in today's closed list reads as a green build. That is could-not-run folded into pass, on the path whose green authorizes a merge.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/gate.rs:20 The fallback is default-allow, not could-not-run. The named unverified statuses (partial/aborted/cancelled/no_baseline) do correctly get a distinct exit 4."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/rubric.rs:382 Cases where the judge's output couldn't be parsed are dropped from `scores` (rubric.rs:147-151) and only reported. The verdict and the --gate exit come from the judged subset, so a hole in the gate's own instrument can still read 'passed'."
+    },
+    {
+     "technique": "vacuous-by-evaluation",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/regression.rs:129 The test only asserts fixture fields and never calls Policy::resolve, so a change to the resolver can't make it fail, despite what the comment says."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/gate.rs:18 A regression maps to a dedicated non-zero exit, which main.rs:211-214 passes to process::exit."
+    }
+   ]
+  },
+  {
+   "context": "economics-margin-pricing",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/margin_policy.rs:256 Margin guardrails create Throttle/Block rules from MarginRow, which drops CostByDimension.unpriced_calls (margin.rs:57-62 says such a cost is only a floor). An unpriced customer's understated cost is therefore enforced on as if it were complete, so a hole in the price book reads as compliance.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/margin_policy.rs:256 The forecast side is conformant (forecast_gate.rs:58 refuses on no data), but the margin-policy side doesn't see unpriced traffic. The API sweep (crates/api/src/margin_guardrails.rs) doesn't consult it either."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/forecast_gate.rs:62 The refusal says what is missing and by how much, rather than going silent."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_sim.rs:98 The what-if surface reuses the enforcement computation instead of re-deriving margin itself."
+    },
+    {
+     "technique": "false-positive-economics",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_policy.rs:83 A cost floor (min_cost_usd) keeps the guardrail from firing on noise, which is the stated purpose."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_policy.rs:53 New guardrails default to observe-only (Warn\u2192Alert) before escalating to Throttle or Block."
+    },
+    {
+     "technique": "item-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_policy.rs:18 Each automated rule names its own reaper (expiry) when it is created."
+    }
+   ]
+  },
+  {
+   "context": "firestore-eval-collective",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/tests/conformance.rs:3 The Firestore conformance test sends could-not-run to pass in every context, including the required CI job whose green authorizes a merge. If that job's env var is ever dropped or misspelled, the required check stays green having tested nothing, and there is no require-switch to make the skip fatal there.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/tests/conformance.rs:3 The skip is loud, but it routes to pass even where the green gates a merge (ci.yml firestore-conformance job, marked required)."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/tests/conformance.rs:17 The skip message names how to restore the check."
+    },
+    {
+     "technique": "blocking-by-input-determinism",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/benchmarks.rs:91 Runs that share a start instant come back in an order Firestore chooses, so the promotion gate reading them can change its verdict on unchanged data. The residual is documented but not fixed or demoted. The PG twin is deterministic."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "quality-gates",
+   "context": "store-integration-tests",
+   "reason": "evidence leans on Architect/strong-patterns.md, which is not a tracked file"
+  },
+  {
+   "subject": "quality-gates",
+   "context": "pg-evaluation-store",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T03:07:05.036480+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "severity-by-construction",
+    "unmeasurable-criteria",
+    "vacuous-by-evaluation"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T03:07:05.036480+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "false-positive-economics",
+    "item-liveness",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "economics-margin-pricing",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T03:07:05.036480+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "blocking-by-input-determinism",
+    "gate-liveness",
+    "refusal-names-a-reachable-remedy"
+   ],
+   "deviations": 1,
+   "context": "firestore-eval-collective",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

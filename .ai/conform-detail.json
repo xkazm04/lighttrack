@@ -9616,6 +9616,104 @@
           "evidence": "crates/contract/src/mcp.rs:35 This splits read tools from write tools for an external client. It is not a registration surface for contributed extensions."
         }
       ]
+    },
+    "971b004d-7b8c-4a5e-8a71-3ab3436cf511/quality-gates": {
+      "context": "runner-scoring-engine",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:07:05.036Z",
+      "worker": "27e529ad-933f-491b-914e-e7efc0f9910d",
+      "techniques": [
+        {
+          "technique": "gate-liveness",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/gate.rs:20 The fallback is default-allow, not could-not-run. The named unverified statuses (partial/aborted/cancelled/no_baseline) do correctly get a distinct exit 4."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/rubric.rs:382 Cases where the judge's output couldn't be parsed are dropped from `scores` (rubric.rs:147-151) and only reported. The verdict and the --gate exit come from the judged subset, so a hole in the gate's own instrument can still read 'passed'."
+        },
+        {
+          "technique": "vacuous-by-evaluation",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/regression.rs:129 The test only asserts fixture fields and never calls Policy::resolve, so a change to the resolver can't make it fail, despite what the comment says."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/gate.rs:18 A regression maps to a dedicated non-zero exit, which main.rs:211-214 passes to process::exit."
+        }
+      ]
+    },
+    "e2e94385-c146-47f1-8018-92afdf565ab7/quality-gates": {
+      "context": "economics-margin-pricing",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:07:05.036Z",
+      "worker": "27e529ad-933f-491b-914e-e7efc0f9910d",
+      "techniques": [
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/margin_policy.rs:256 The forecast side is conformant (forecast_gate.rs:58 refuses on no data), but the margin-policy side doesn't see unpriced traffic. The API sweep (crates/api/src/margin_guardrails.rs) doesn't consult it either."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/forecast_gate.rs:62 The refusal says what is missing and by how much, rather than going silent."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/margin_sim.rs:98 The what-if surface reuses the enforcement computation instead of re-deriving margin itself."
+        },
+        {
+          "technique": "false-positive-economics",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/margin_policy.rs:83 A cost floor (min_cost_usd) keeps the guardrail from firing on noise, which is the stated purpose."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/margin_policy.rs:53 New guardrails default to observe-only (Warn→Alert) before escalating to Throttle or Block."
+        },
+        {
+          "technique": "item-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/margin_policy.rs:18 Each automated rule names its own reaper (expiry) when it is created."
+        }
+      ]
+    },
+    "32c31d6e-f9fb-4806-855a-b6056d920f34/quality-gates": {
+      "context": "firestore-eval-collective",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T03:07:05.036Z",
+      "worker": "27e529ad-933f-491b-914e-e7efc0f9910d",
+      "techniques": [
+        {
+          "technique": "gate-liveness",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/tests/conformance.rs:3 The skip is loud, but it routes to pass even where the green gates a merge (ci.yml firestore-conformance job, marked required)."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/store-firestore/tests/conformance.rs:17 The skip message names how to restore the check."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/benchmarks.rs:91 Runs that share a start instant come back in an order Firestore chooses, so the promotion gate reading them can change its verdict on unchanged data. The residual is documented but not fixed or demoted. The PG twin is deterministic."
+        }
+      ]
     }
   }
 }
