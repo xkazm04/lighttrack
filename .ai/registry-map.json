@@ -4684,7 +4684,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/events.rs:130 The `get_event` Markdown that lt-mcp hands an agent cuts an LLM input/output payload at 4000 chars and marks the cut with a single '…' inside the code fence, without saying how much was dropped or where the rest is. An agent can therefore reason over a clipped payload as if it were whole. The same crate does it properly for spans (traces.rs:89 says 'N of M … truncated'). One caveat: tools.rs also attaches the full body as structuredContent, and whether the model sees it depends on the host.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "voice-io",
@@ -4878,7 +4882,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/prompts.rs:20 This context only persists prompt versions as rows with opaque `content`/`config` columns, plus scores, benchmarks, datasets, rubrics, labels and calibrations, and builds no model prompt. A search of crates/store-pg for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -5249,7 +5257,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/lib.rs:8 This is the Postgres Store backend (projects, prices, jobs, relay, devices, alerts) and issues no model call and assembles no prompt. A search of crates/store-pg for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "fleet-orchestration",
@@ -7005,7 +7017,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store/src/sqlite/usage_cache.rs:3 The 'cache', 'window' and 'rolling' tokens that matched this context to the subject are a time-window usage cache for limit admission, not a context window or prompt cache; nothing here builds a prompt. A search of crates/store for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+          "evaluatedAt": "2026-11-04",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "llm-price-book-operations",

@@ -9060,16 +9060,11 @@
       "context": "sqlite-governance-backend",
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-11-03",
-      "evaluatedTs": "2026-11-03T23:59:02.222Z",
-      "techniques": [],
-      "withdrawn": {
-        "worker": "71de26cf-021d-417f-93d9-1f1c4f5df91d",
-        "state": "not-applicable",
-        "at": "2026-11-03T23:59:28.208996+00:00",
-        "reason": "reviewer (sonnet): The anchor revenue.rs:202 is only a JSON-path match, so it doesn't show that prompt handling is absent. The same sqlite directory has prompts.rs, which stores prompts and prompt versions, and it is not among the context files. The searched terms (compaction, system_prompt, render_prompt, context_win"
-      }
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T00:38:25.653Z",
+      "worker": "3179dd53-01b5-4755-93f4-1406843756a3",
+      "techniques": []
     },
     "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/eval-harness": {
       "context": "provider-generation",
@@ -9096,6 +9091,58 @@
           "evidence": "crates/engine/src/pool.rs:12 Fan-out goes through a bounded worker pool with declared `jobs`, and results come back in index order rather than completion order. Retry is bounded by MAX_TRIES and CALL_BUDGET in retry.rs. The provider_boundary test drives the real path against a loopback stub."
         }
       ]
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/prompt-assembly": {
+      "context": "pg-evaluation-store",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T00:38:25.653Z",
+      "worker": "3179dd53-01b5-4755-93f4-1406843756a3",
+      "techniques": []
+    },
+    "ae45e444-9735-4d0d-a66c-a946ba4d5e88/prompt-assembly": {
+      "context": "pg-platform-operations",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T00:38:25.653Z",
+      "worker": "3179dd53-01b5-4755-93f4-1406843756a3",
+      "techniques": []
+    },
+    "27581a68-b0d5-452e-8130-7283211996ae/prompt-assembly": {
+      "context": "observability-rendering",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-04",
+      "evaluatedTs": "2026-11-04T00:38:25.653Z",
+      "worker": "3179dd53-01b5-4755-93f4-1406843756a3",
+      "techniques": [
+        {
+          "technique": "context-budgeting",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/events.rs:130 The cut marks that it happened but does not name the remainder ('truncation names what it dropped'); jobs.rs:65 repeats the pattern at 1500 chars."
+        },
+        {
+          "technique": "consumer-coupled-decoration",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/collective.rs:150 The comment at the attach site names who reads the decoration and why; traces.rs:51 does the same for whole trace ids. Not a full audit: the capabilities table's constant ✅ column was not costed."
+        },
+        {
+          "technique": "capability-documentation",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/capabilities.rs:19 Tool-level analogue only: the capability view is built from the live backend manifest and puts the refused (501) surfaces first, so an agent is not taught calls the backend rejects."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:105 This is a per-response tool-output renderer, not a prompt stack; there are no identity, policy or task layers to own or order."
+        }
+      ],
+      "registryProposal": "Tool-output producers (MCP renderers) inherit this subject's 'truncation names what it dropped' rule and consumer-coupled-decoration, but context-budgeting is written only for the assembler. A sentence saying the honest-truncation discipline binds every producer whose output lands in model context, or a pointer to tool-result-economy, would remove the ambiguity."
     }
   }
 }

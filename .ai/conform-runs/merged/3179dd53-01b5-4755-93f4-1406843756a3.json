@@ -1,0 +1,147 @@
+{
+ "schema": "conform-run/1",
+ "worker": "3179dd53-01b5-4755-93f4-1406843756a3",
+ "subject": "prompt-assembly",
+ "evaluatedAt": "2026-11-04T00:38:25.653303+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "pg-evaluation-store",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/prompts.rs:20 This context only persists prompt versions as rows with opaque `content`/`config` columns, plus scores, benchmarks, datasets, rubrics, labels and calibrations, and builds no model prompt. A search of crates/store-pg for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "compaction",
+    "context_window",
+    "cache_control",
+    "system_prompt",
+    "max_tokens"
+   ]
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/lib.rs:8 This is the Postgres Store backend (projects, prices, jobs, relay, devices, alerts) and issues no model call and assembles no prompt. A search of crates/store-pg for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "compaction",
+    "context_window",
+    "cache_control",
+    "system_prompt",
+    "max_tokens"
+   ]
+  },
+  {
+   "context": "sqlite-governance-backend",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/sqlite/usage_cache.rs:3 The 'cache', 'window' and 'rolling' tokens that matched this context to the subject are a time-window usage cache for limit admission, not a context window or prompt cache; nothing here builds a prompt. A search of crates/store for compaction, context_window, cache_control, system_prompt and max_tokens found no hits.",
+   "techniques": [],
+   "absenceTerms": [
+    "compaction",
+    "context_window",
+    "cache_control",
+    "system_prompt",
+    "max_tokens"
+   ]
+  },
+  {
+   "context": "observability-rendering",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/events.rs:130 The `get_event` Markdown that lt-mcp hands an agent cuts an LLM input/output payload at 4000 chars and marks the cut with a single '\u2026' inside the code fence, without saying how much was dropped or where the rest is. An agent can therefore reason over a clipped payload as if it were whole. The same crate does it properly for spans (traces.rs:89 says 'N of M \u2026 truncated'). One caveat: tools.rs also attaches the full body as structuredContent, and whether the model sees it depends on the host.",
+   "techniques": [
+    {
+     "technique": "context-budgeting",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/events.rs:130 The cut marks that it happened but does not name the remainder ('truncation names what it dropped'); jobs.rs:65 repeats the pattern at 1500 chars."
+    },
+    {
+     "technique": "consumer-coupled-decoration",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/collective.rs:150 The comment at the attach site names who reads the decoration and why; traces.rs:51 does the same for whole trace ids. Not a full audit: the capabilities table's constant \u2705 column was not costed."
+    },
+    {
+     "technique": "capability-documentation",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/capabilities.rs:19 Tool-level analogue only: the capability view is built from the live backend manifest and puts the refused (501) surfaces first, so an agent is not taught calls the backend rejects."
+    },
+    {
+     "technique": "layered-composition",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/lib.rs:105 This is a per-response tool-output renderer, not a prompt stack; there are no identity, policy or task layers to own or order."
+    }
+   ],
+   "registryProposal": "Tool-output producers (MCP renderers) inherit this subject's 'truncation names what it dropped' rule and consumer-coupled-decoration, but context-budgeting is written only for the assembler. A sentence saying the honest-truncation discipline binds every producer whose output lands in model context, or a pointer to tool-result-economy, would remove the ambiguity."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "prompt-assembly",
+   "context": "evaluation-pipeline",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-04T00:38:25.653303+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T00:38:25.653303+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T00:38:25.653303+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "sqlite-governance-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-04T00:38:25.653303+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "capability-documentation",
+    "consumer-coupled-decoration",
+    "context-budgeting",
+    "layered-composition"
+   ],
+   "deviations": 1,
+   "context": "observability-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
