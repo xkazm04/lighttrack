@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c40248a7-a733-4920-94a3-7dcd6efe9518",
+ "subject": "agent-runtime-assembly",
+ "evaluatedAt": "2026-11-05T22:23:51.424432+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "agent-runtime-assembly",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/audit.rs, which is not a tracked file"
+  }
+ ],
+ "consults": []
+}
