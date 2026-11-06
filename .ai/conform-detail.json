@@ -10412,21 +10412,25 @@
       "subject": "cross-provider-benchmark-operations",
       "bundle": "llm-observability",
       "state": "unknown",
-      "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T05:19:29.199Z",
+      "evaluatedAt": "2026-11-06",
+      "evaluatedTs": "2026-11-06T22:09:25.024Z",
       "techniques": [
         {
           "technique": "entitlement-exhaustion-is-not-ill-health",
           "verdict": "not-applicable",
-          "evidence": "crates/gateway/src/config.rs:1 The gateway does classify seat exhaustion separately from transient failure (failover.rs), but for live routing, not for a benchmark matrix."
+          "evidence": "crates/gateway/src/failover.rs:56 The gateway does classify seat exhaustion separately from transient failure, but only for live failover. There is no matrix whose halted column needs diagnosing. Note: every RateLimited response becomes Exhausted regardless of how long the stated wait is."
+        },
+        {
+          "technique": "sampling-knobs-are-axes-not-strings",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/main.rs:4 Effort rides as a string suffix on the route spec, but this is a routing config, not a benchmark target declaration."
         }
       ],
-      "registryProposal": "The gateway's failover classifier (Exhausted vs Transient, with cooldown driven by retry_after) is a runtime twin of entitlement-exhaustion-is-not-ill-health. A routing subject (model-routing / multi-provider-gateway-plane) may want a sibling technique so the rule is not confined to benchmark operations.",
       "withdrawn": {
-        "worker": "296e1f82-dca7-4caa-b5ca-f65937e06ef1",
+        "worker": "26b14b5e-59df-4c0f-aff4-0773d9bc9856",
         "state": "not-applicable",
-        "at": "2026-11-04T05:20:05.420212+00:00",
-        "reason": "reviewer (sonnet): The anchor crates/gateway/src/config.rs:1 is only the routing-config doc header, so it does not show that benchmark operations are absent; the 0-hit search is real but uses narrow terms, and I could not confirm that the golden path places the gateway outside this subject, whose name includes cross-p"
+        "at": "2026-11-06T22:09:47.576853+00:00",
+        "reason": "reviewer (sonnet): The not-applicable anchor (failover.rs:3) is a doc-comment line about failover questions that does not show a benchmark matrix, dataset or scorecard is absent, and I could not confirm the golden-path claim that routing belongs to builder-side model routing."
       }
     },
     "06329049-432d-4a4b-91c0-f1967d7c9e99/mcp-tools": {
