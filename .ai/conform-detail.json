@@ -6061,39 +6061,48 @@
       "subject": "engine-host-contract",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-16",
-      "evaluatedTs": "2026-10-16T00:36:33.281Z",
-      "worker": "ba0e9738-f8c9-44e1-952e-07f9f854154c",
+      "evaluatedAt": "2026-11-06",
+      "evaluatedTs": "2026-11-06T23:03:25.453Z",
+      "worker": "da868dc6-ad95-422f-8074-b9e8d6f8f17d",
       "techniques": [
         {
-          "technique": "contained-async-module-loader",
+          "technique": "spec-mirrored-hook-surface",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/jobs_enqueue.rs:89 The enqueue boundary validates application job payloads; searches found no guest module resolution or loading hook."
-        },
-        {
-          "technique": "idle-aware-job-loop",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/schedule_sweep.rs:67 This ticker drives stored-schedule maintenance, without embedded-engine microtask/macrotask ordering."
-        },
-        {
-          "technique": "monotonic-and-wall-clock-split",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/schedule_sweep.rs:96 Wall time selects durable schedules from storage; no guest timer/date clock seam or suspendable engine contexts were found."
+          "evidence": "crates/api/src/jobs.rs:1 The module is an HTTP job-queue API with claim, progress and finish operations. No engine exposes host-hook overrides here."
         },
         {
           "technique": "null-and-blocking-executors",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/jobs.rs:121 Execution ownership comes from a durable store claim, without engine-shipped promise executors or a default context executor."
+          "evidence": "crates/api/src/schedule_sweep.rs:66 Background work is a detached tokio task. No engine job executor is chosen or shipped."
         },
         {
-          "technique": "spec-mirrored-hook-surface",
+          "technique": "idle-aware-job-loop",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/jobs_enqueue.rs:145 The accepted vocabulary is the application's job kinds; no specification-defined language host-hook surface was found."
+          "evidence": "crates/api/src/schedule_sweep.rs:67 The loop is a fixed-interval DB sweep. It does not drain an embedded engine's promise, timer or finalization queues."
+        },
+        {
+          "technique": "monotonic-and-wall-clock-split",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/schedule_sweep.rs:96 Wall-clock time is used for schedule due-checks. No engine needs a host clock seam."
         },
         {
           "technique": "untraceable-jobs-as-roots",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/storage.rs:521 This maintenance operates on database pages and journals, without a traced guest heap or promise jobs requiring external roots."
+          "evidence": "crates/api/src/jobs.rs:12 Job is a serializable DB row type. There is no garbage-collected guest heap for it to root or trace."
+        },
+        {
+          "technique": "contained-async-module-loader",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:17 Enqueueing validates typed payloads against JobKind. No guest import specifiers are resolved, so no module loader exists to contain."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:109 Context and repository searches found no microtask, HostHooks, JobExecutor, ModuleLoader, or JsValue occurrences, and this context persists application jobs and maintains database storage rather than implementing an embedded language engine's host contract.",
+          "evaluatedAt": "2026-10-16T00:36:33.281Z",
+          "worker": "ba0e9738-f8c9-44e1-952e-07f9f854154c",
+          "reason": "replaced by da868dc6-ad95-422f-8074-b9e8d6f8f17d"
         }
       ]
     },

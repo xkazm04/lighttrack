@@ -7626,12 +7626,11 @@
           "changedAt": "2026-10-22",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/api/src/jobs_enqueue.rs:109 Context and repository searches found no microtask, HostHooks, JobExecutor, ModuleLoader, or JsValue occurrences, and this context persists application jobs and maintains database storage rather than implementing an embedded language engine's host contract.",
-          "evaluatedAt": "2026-10-16",
-          "evaluatedAgainst": "sha256-b2:08d3fea13f40733a",
-          "evaluatedRevision": 2,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/Cargo.toml:21 The context's crate depends on tokio, axum and reqwest but on no embeddable language engine. A search of crates/ and the whole repo outside .ai/ for HostHooks, JobExecutor, ModuleLoader, JsValue and microtask found nothing, so its 'jobs' are persisted queue rows and a tokio sweep, not an engine's job queues, and the subject's precondition (embedding a language engine in a host) does not hold.",
+          "evaluatedAt": "2026-11-06",
+          "evaluatedAgainst": "sha256-b2:dcbd96d1274205ef",
+          "evaluatedRevision": 3,
+          "revisionsBehind": 1
         },
         {
           "subject": "fleet-orchestration",

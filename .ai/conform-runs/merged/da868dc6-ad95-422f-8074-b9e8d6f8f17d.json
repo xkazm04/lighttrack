@@ -1,0 +1,78 @@
+{
+ "schema": "conform-run/1",
+ "worker": "da868dc6-ad95-422f-8074-b9e8d6f8f17d",
+ "subject": "engine-host-contract",
+ "evaluatedAt": "2026-11-06T23:03:25.453756+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "storage-and-jobs",
+   "subject": "engine-host-contract",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/Cargo.toml:21 The context's crate depends on tokio, axum and reqwest but on no embeddable language engine. A search of crates/ and the whole repo outside .ai/ for HostHooks, JobExecutor, ModuleLoader, JsValue and microtask found nothing, so its 'jobs' are persisted queue rows and a tokio sweep, not an engine's job queues, and the subject's precondition (embedding a language engine in a host) does not hold.",
+   "techniques": [
+    {
+     "technique": "spec-mirrored-hook-surface",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:1 The module is an HTTP job-queue API with claim, progress and finish operations. No engine exposes host-hook overrides here."
+    },
+    {
+     "technique": "null-and-blocking-executors",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/schedule_sweep.rs:66 Background work is a detached tokio task. No engine job executor is chosen or shipped."
+    },
+    {
+     "technique": "idle-aware-job-loop",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/schedule_sweep.rs:67 The loop is a fixed-interval DB sweep. It does not drain an embedded engine's promise, timer or finalization queues."
+    },
+    {
+     "technique": "monotonic-and-wall-clock-split",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/schedule_sweep.rs:96 Wall-clock time is used for schedule due-checks. No engine needs a host clock seam."
+    },
+    {
+     "technique": "untraceable-jobs-as-roots",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs.rs:12 Job is a serializable DB row type. There is no garbage-collected guest heap for it to root or trace."
+    },
+    {
+     "technique": "contained-async-module-loader",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/jobs_enqueue.rs:17 Enqueueing validates typed payloads against JobKind. No guest import specifiers are resolved, so no module loader exists to contain."
+    }
+   ],
+   "absenceTerms": [
+    "HostHooks",
+    "JobExecutor",
+    "ModuleLoader",
+    "JsValue",
+    "microtask"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-06T23:03:25.453756+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "engine-host-contract"
+   ],
+   "techniques": [
+    "contained-async-module-loader",
+    "idle-aware-job-loop",
+    "monotonic-and-wall-clock-split",
+    "null-and-blocking-executors",
+    "spec-mirrored-hook-surface",
+    "untraceable-jobs-as-roots"
+   ],
+   "deviations": 0,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
