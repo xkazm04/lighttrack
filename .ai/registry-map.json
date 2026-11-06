@@ -1661,13 +1661,12 @@
           "changedAt": "2026-10-31",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/engine/src/invocation/run.rs:123 This context launches CLI subprocesses and exchanges bytes; context and repository searches found no PhantomPinned, MaybeUninit, NonNull, or transmute, and inspection found no foreign-memory binding surface requiring these techniques.",
-          "evaluatedAt": "2026-10-18",
-          "evaluatedAgainst": "sha256-b2:823cd55ac89d000b",
-          "evaluatedRevision": 2,
+          "evidence": "crates/engine/src/invocation/run.rs:23 This context reaches the Claude, Codex, contree and docker CLIs as separate OS processes (std::process::Command, stdin/stdout byte pipes), not as foreign libraries loaded in-process. A grep of the whole crates/engine tree for extern \"C\", MaybeUninit, PhantomPinned, PhantomData, transmute and NonNull found nothing, so there is no foreign memory model, address-sensitive object, foreign class hierarchy or thread-bound foreign release for the binding-surface techniques to govern.",
+          "evaluatedAt": "2026-11-06",
+          "evaluatedAgainst": "sha256-b2:cf656e76f4ec68fa",
+          "evaluatedRevision": 3,
           "source": "retained",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         }
       ],
       "governance": "governed"
