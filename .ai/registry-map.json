@@ -1603,7 +1603,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/invocation/mod.rs:15 This context is the member-level seam: one headless claude/codex child spawned, posture-checked, reaped and parsed per call. The golden path assigns that to the sibling subject subprocess-lifecycle. I searched crates/engine for hibernat, roster, harvest and straggler and found nothing. The only 'session' hits are Codex's per-turn log files and contree's per-thread -S names, so this context has no fleet registry, dispatch roster or harvest to judge.",
+          "evaluatedAt": "2026-11-06",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "hitl-approval",

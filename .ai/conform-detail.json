@@ -10631,6 +10631,16 @@
           "evidence": "crates/render/src/lib.rs:3 no memory store is read through several windowed paths"
         }
       ]
+    },
+    "1c799276-3129-490e-b740-b5c16c49e59f/fleet-orchestration": {
+      "context": "claude-invocation-and-execution",
+      "subject": "fleet-orchestration",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-06",
+      "evaluatedTs": "2026-11-06T23:47:09.690Z",
+      "worker": "18f0786c-3193-4f2f-b8f1-930ba35266e2",
+      "techniques": []
     }
   }
 }
