@@ -8277,12 +8277,11 @@
           "changedAt": "2026-10-23",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "clients/typescript/package.json:4 This package implements telemetry ingestion rather than a guest-language engine, and searches of its directory and the repository found no bytecode, realm, disassemble, hiddenClass or debugGlobal constructs requiring this subject.",
-          "evaluatedAt": "2026-10-18",
-          "evaluatedAgainst": "sha256-b2:2c6a2e97171d3e18",
-          "evaluatedRevision": 2,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "clients/typescript/src/index.ts:2 This context is a telemetry-ingestion client that runs on a host JS engine. It does not implement a language engine, so it has no guest program to expose a debug global, representation probes, trace flags, settable limits or a realm factory to; a case-insensitive search of every tracked file under clients/typescript for realm, bytecode, disassemble, hiddenClass and createRealm found no hits.",
+          "evaluatedAt": "2026-11-06",
+          "evaluatedAgainst": "sha256-b2:d9a0bca3698f0a65",
+          "evaluatedRevision": 3,
+          "revisionsBehind": 1
         },
         {
           "subject": "embedded-db",
