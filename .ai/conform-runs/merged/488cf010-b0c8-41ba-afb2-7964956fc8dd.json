@@ -1,0 +1,22 @@
+{
+ "schema": "conform-run/1",
+ "worker": "488cf010-b0c8-41ba-afb2-7964956fc8dd",
+ "subject": "agent-instruction-files",
+ "evaluatedAt": "2026-11-07T02:18:51.623408+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "agent-instruction-files",
+   "context": "mcp-server",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "agent-instruction-files",
+   "context": "api-endpoint-table",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}
