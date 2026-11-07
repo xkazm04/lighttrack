@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "93cc35dd-e2fc-4d60-9f77-445f21feea9d",
+ "subject": "judge-contract-design",
+ "evaluatedAt": "2026-11-07T03:12:59.180347+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "judge-contract-design",
+   "context": "judge-and-scoring",
+   "reason": "evidence leans on core/src/rubric.rs, which is not a tracked file"
+  }
+ ],
+ "consults": []
+}
