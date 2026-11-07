@@ -1,0 +1,138 @@
+{
+ "schema": "conform-run/1",
+ "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+ "subject": "agent-memory",
+ "evaluatedAt": "2026-11-07T02:04:57.264889+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "core-observability-types",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/core/src/lib.rs:5 core is the I/O-free type crate for telemetry events, pricing, limits and scores, not an agent that keeps memory; a case-insensitive search of crates/core for recall, consolidat, agent_memory and memories found nothing, and its only memory/episode hits are 'process memory', an 'in-memory index' and limit-backtest breach episodes.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "memories"
+   ]
+  },
+  {
+   "context": "storage-and-jobs",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/api/src/storage.rs:1 This context is a job queue, schedules, redaction and SQLite disk maintenance, with no agent memory that captures, distils, recalls or forgets beliefs; a case-insensitive search of crates/api/src for recall, consolidat, agent_memory and memories found nothing, and storage.rs's only 'memory' hit is an in-memory flight-recorder ring.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "memories"
+   ]
+  },
+  {
+   "context": "python-sdk",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "clients/python/lighttrack/journal.py:1 The SDK's only durable store is a crash-recovery journal of in-flight LLM calls (telemetry breadcrumbs, not beliefs an agent carries forward); a search of clients/python for recall, consolidat, agent_memory, memories and even memory found nothing.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "memories"
+   ]
+  },
+  {
+   "context": "sqlite-platform-backend",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/sqlite/mod.rs:1 This is the SQLite Store backend for projects, keys, jobs, schedules, maintenance, metrics, relay and devices, with no layer for agent beliefs or episodes; a search of crates/store/src/sqlite for recall, consolidat, agent_memory and memories found nothing, and its 'memory' hits are SQLite :memory: and in-memory metrics wording.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "memories"
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/core/src/limits/mod.rs:1 Usage-limit rules, alerts, webhook signing and repo-invariant guard tests have no agent memory pipeline; a search of crates/core/src/limits and crates/core/tests for recall, consolidat, agent_memory and memories found nothing, and 'episode' there means a folded run of limit breaches in backtest.rs, not an episodic memory record.",
+   "techniques": [],
+   "absenceTerms": [
+    "recall",
+    "consolidat",
+    "memories"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-07T02:04:57.264889+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "core-observability-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T02:04:57.264889+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T02:04:57.264889+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "python-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T02:04:57.264889+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "sqlite-platform-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T02:04:57.264889+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

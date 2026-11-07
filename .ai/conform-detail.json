@@ -10693,6 +10693,56 @@
       "evaluatedTs": "2026-11-07T00:35:48.811Z",
       "worker": "088cac19-aced-413b-a103-1932cae61093",
       "techniques": []
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/agent-memory": {
+      "context": "core-observability-types",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:04:57.264Z",
+      "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+      "techniques": []
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/agent-memory": {
+      "context": "storage-and-jobs",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:04:57.264Z",
+      "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+      "techniques": []
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/agent-memory": {
+      "context": "python-sdk",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:04:57.264Z",
+      "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+      "techniques": []
+    },
+    "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/agent-memory": {
+      "context": "sqlite-platform-backend",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:04:57.264Z",
+      "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+      "techniques": []
+    },
+    "5b2cd610-77f3-4d26-aa7a-da3dd13618fe/agent-memory": {
+      "context": "usage-governance-limits",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:04:57.264Z",
+      "worker": "f9234ea1-a672-4a7f-a912-8a4478356df1",
+      "techniques": []
     }
   }
 }

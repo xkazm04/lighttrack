@@ -2131,8 +2131,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/core/src/lib.rs:5 core is the I/O-free type crate for telemetry events, pricing, limits and scores, not an agent that keeps memory; a case-insensitive search of crates/core for recall, consolidat, agent_memory and memories found nothing, and its only memory/episode hits are 'process memory', an 'in-memory index' and limit-backtest breach episodes.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "trace-rollup-and-attribution",
@@ -5962,8 +5966,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "clients/python/lighttrack/journal.py:1 The SDK's only durable store is a crash-recovery journal of in-flight LLM calls (telemetry breadcrumbs, not beliefs an agent carries forward); a search of clients/python for recall, consolidat, agent_memory, memories and even memory found nothing.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "quality-gates",
@@ -7381,8 +7389,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/store/src/sqlite/mod.rs:1 This is the SQLite Store backend for projects, keys, jobs, schedules, maintenance, metrics, relay and devices, with no layer for agent beliefs or episodes; a search of crates/store/src/sqlite for recall, consolidat, agent_memory and memories found nothing, and its 'memory' hits are SQLite :memory: and in-memory metrics wording.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "mcp-tools",
@@ -7515,8 +7527,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/api/src/storage.rs:1 This context is a job queue, schedules, redaction and SQLite disk maintenance, with no agent memory that captures, distils, recalls or forgets beliefs; a case-insensitive search of crates/api/src for recall, consolidat, agent_memory and memories found nothing, and storage.rs's only 'memory' hit is an in-memory flight-recorder ring.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         },
         {
           "subject": "background-jobs",
@@ -8547,8 +8563,12 @@
           "revision": 52,
           "changedAt": "2026-10-25",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 5
+          "state": "not-applicable",
+          "priorNotApplicable": 5,
+          "evidence": "crates/core/src/limits/mod.rs:1 Usage-limit rules, alerts, webhook signing and repo-invariant guard tests have no agent memory pipeline; a search of crates/core/src/limits and crates/core/tests for recall, consolidat, agent_memory and memories found nothing, and 'episode' there means a folded run of limit breaches in backtest.rs, not an episodic memory record.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:6c06fb6d8d6c900f",
+          "evaluatedRevision": 52
         }
       ],
       "governance": "governed"
