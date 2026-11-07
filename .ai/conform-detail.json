@@ -8096,30 +8096,31 @@
       "subject": "embedded-db",
       "bundle": "software-engineering",
       "state": "unknown",
-      "evaluatedAt": "2026-10-24",
-      "evaluatedTs": "2026-10-24T05:29:56.471Z",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:55:47.224Z",
       "techniques": [
         {
           "technique": "storage-accounting-and-pruning",
           "verdict": "deviation",
-          "evidence": "crates/store/src/conformance/maintenance.rs:23 The accounting half is held to account: objects must be non-empty (line 14), db_bytes > 0, and a backend that measures nothing must refuse (refusals.rs:529) rather than report zeros. The pruning half is codified as absent."
+          "evidence": "crates/store/src/conformance/maintenance.rs:23 The accounting half is checked (lines 13-21: objects non-empty, db_bytes > 0), and keeping reclamation separate from deletion is pinned (line 40). The pruning half of the technique has no surface and no conformance case."
         },
         {
           "technique": "db-self-instrumentation",
           "verdict": "conformant",
-          "evidence": "crates/store/src/conformance/maintenance.rs:50 Requires a declared ring bound, a non-empty op profile after the run, and only families that actually ran (lines 54-59). An empty profile is not allowed to read as 'everything is fast'."
+          "evidence": "crates/store/src/conformance/maintenance.rs:50 A backend that declares Surface::Metrics must report a bounded ring, a non-empty operation profile and only the families that actually ran. A backend that measures nothing must refuse (driver.rs routes it to refusals), not report 'everything is fast'."
         },
         {
           "technique": "quiet-window-maintenance",
           "verdict": "conformant",
-          "evidence": "crates/store/src/conformance/maintenance.rs:33 Holds every backend to the outcome vocabulary that separates 'ran' from 'nothing to do' and to a lossless routine pass. The activity gating itself is in crates/api/src/storage.rs, not here."
+          "evidence": "crates/store/src/conformance/maintenance.rs:33 Holds every backend to the outcome vocabulary that separates 'ran' from 'nothing to do' and to a lossless routine pass. The activity gating itself is in crates/api/src/storage.rs, not here.",
+          "carriedFrom": "2026-10-24"
         }
       ],
       "withdrawn": {
-        "worker": "e0f92acb-0074-4c46-8088-d2be459fb3dd",
+        "worker": "68f45cd6-7b1d-414a-9eb7-c1f96010322f",
         "state": "deviation",
-        "at": "2026-10-24T05:30:14.311774+00:00",
-        "reason": "reviewer (sonnet): The line 23 comment only says maintenance_pass has no pruning parameter, but the Store trait does have an age-floor prune, purge_collective_entries_before (lib.rs:1822, sqlite/collective.rs:71). The retention policy is also a dated operator decision (sqlite/maintenance.rs:54-60), so 'the absence of "
+        "at": "2026-11-07T02:56:20.483504+00:00",
+        "reason": "reviewer (sonnet): The verdict rests on the same documented, deliberate no-pruning decision. maintenance.rs:23 only says the lossless pass has no pruning parameter. I could not confirm that no pruning-style surface exists. The store has a dry_run in lib.rs:223 and 1624 and a time-bounded collective purge, and collecti"
       }
     },
     "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/test-input-generation": {
@@ -10875,6 +10876,38 @@
         }
       ],
       "registryProposal": "The subject's precondition is agent sessions, but its registry, lifecycle and lease techniques fire just as strongly on a pull-based job queue of non-agent workers. The golden path could say whether a worker job queue is in scope or belongs wholly to background-jobs and job-coordination, so mappings like this one stop being judged by analogy."
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/embedded-db": {
+      "context": "storage-and-jobs",
+      "subject": "embedded-db",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T02:55:47.224Z",
+      "techniques": [
+        {
+          "technique": "quiet-window-maintenance",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/storage.rs:548 Realized in full. An ActivityGauge is fed by router middleware; the gate needs both gauge==0 and a minimum interval (decide(), lines 394-472); the escalation ladder Quiet/Quieter/Escalated uses hard bounds stated in bytes (journal size, reclaimable share); the pass runs in chunks and re-reads the gauge between chunks after yielding; every evaluation, including deferrals and failures, goes into a bounded ring served at /v1/storage/status."
+        },
+        {
+          "technique": "storage-accounting-and-pruning",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/storage.rs:4 Accounting (storage_report, admin-only) and reclamation as a separate quiet-window act both exist. The pruner does not: no dry-run, no age floor, no terminal-state allowlist, and no per-table policy. jobs.rs and schedules.rs keep terminal job rows with no reaper (a grep for prune/retention/purge in the context found nothing)."
+        },
+        {
+          "technique": "db-self-instrumentation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/storage.rs:606 This context is the diagnostic-surface consumer. It serves the store's latency report next to accounting and the maintenance recorder, and returns null plus an 'unsupported' explanation rather than empty-good-news. The ring itself lives in crates/store/src/sqlite/metrics.rs, outside this context."
+        }
+      ],
+      "registryProposal": "storage-accounting-and-pruning could say outright whether an explicit, documented 'retain everything' operator policy, backed by accounting and reclamation, satisfies the creation-names-reaper law or is still a deviation. The retention section ('defaulting to keeping data when uncertain') and the golden path ('rows born without a named reaper is a slow-motion incident') pull in different directions here.",
+      "withdrawn": {
+        "worker": "68f45cd6-7b1d-414a-9eb7-c1f96010322f",
+        "state": "deviation",
+        "at": "2026-11-07T02:56:20.447533+00:00",
+        "reason": "reviewer (sonnet): The anchor line, storage.rs:4, records a deliberate operator decision (2026-08-24) that retention is unbounded, made visible through /v1/storage/status and Store `retention` (lib.rs:784). The deviation verdict treats that as an unrecorded gap. I also could not confirm that jobs.rs and schedules.rs k"
+      }
     }
   }
 }

@@ -1,0 +1,54 @@
+{
+  "schema": "conform-run/1",
+  "worker": "68f45cd6-7b1d-414a-9eb7-c1f96010322f",
+  "subject": "embedded-db",
+  "evaluatedAt": "2026-11-07T02:55:47.224123+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [],
+  "declined": [
+    {
+      "subject": "embedded-db",
+      "context": "storage-and-jobs",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor line, storage.rs:4, records a deliberate operator decision (2026-08-24) that retention is unbounded, made visible through /v1/storage/status and Store `retention` (lib.rs:784). The deviation verdict treats that as an unrecorded gap. I also could not confirm that jobs.rs and schedules.rs k"
+    },
+    {
+      "subject": "embedded-db",
+      "context": "store-conformance-governance",
+      "reason": "withdrawn after review: reviewer (sonnet): The verdict rests on the same documented, deliberate no-pruning decision. maintenance.rs:23 only says the lossless pass has no pruning parameter. I could not confirm that no pruning-style surface exists. The store has a dry_run in lib.rs:223 and 1624 and a time-bounded collective purge, and collecti"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-07T02:55:47.224123+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "embedded-db"
+      ],
+      "techniques": [
+        "db-self-instrumentation",
+        "quiet-window-maintenance",
+        "storage-accounting-and-pruning"
+      ],
+      "deviations": 1,
+      "context": "storage-and-jobs",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-11-07T02:55:47.224123+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "embedded-db"
+      ],
+      "techniques": [
+        "db-self-instrumentation",
+        "storage-accounting-and-pruning"
+      ],
+      "deviations": 1,
+      "context": "store-conformance-governance",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
