@@ -1,0 +1,124 @@
+{
+ "schema": "conform-run/1",
+ "worker": "6cb7417d-b62c-44f1-ae41-914d4c0a2220",
+ "subject": "fleet-orchestration",
+ "evaluatedAt": "2026-11-07T02:47:20.561359+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/runner/src/compare.rs:557 The run fans out in-process closures (a generate+judge cell per target and case) across a scoped thread pool, not autonomous agent sessions with a registry, lifecycle, hibernation or harvest from drop points; a case-insensitive search of crates/runner/src for agent, fleet, hibernat and worktree found no hits, so the subject's precondition (a fleet of agent sessions) does not hold here.",
+   "techniques": [
+    {
+     "technique": "parallel-dispatch",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/compare.rs:513 Analogue only: a run-total dollar ceiling plus a --jobs concurrency bound over model-call cells, not session dispatch with write scopes."
+    },
+    {
+     "technique": "result-harvest",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/compare.rs:1011 Analogue only: per-target roster accounting (planned, skipped, errored, partial, cancelled) over cases, not session drop points."
+    },
+    {
+     "technique": "soft-budget-under-the-hard-cap",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/budget.rs:109 A spend ceiling over a fixed case matrix; no model-driven loop elects when to stop, so there is no brief that could carry a soft budget."
+    },
+    {
+     "technique": "heterogeneous-model-panels",
+     "verdict": "not-applicable",
+     "evidence": "crates/runner/src/bench.rs:288 Benchmarks measure targets; no N-model panel is convened to decide a question."
+    }
+   ],
+   "absenceTerms": [
+    "agent",
+    "fleet",
+    "hibernat",
+    "worktree"
+   ]
+  },
+  {
+   "context": "storage-and-jobs",
+   "subject": "fleet-orchestration",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/jobs.rs:203 The finish door takes the worker's status as a free string and writes it straight through (only the store's SQL guards against re-finishing done, failed or cancelled), so job status is not a closed vocabulary arbitrated by one transition door: a worker can 'finish' a job into running, queued or a misspelled state, and consumers such as the schedule sweep keep their own literal copies of the status set.",
+   "techniques": [
+    {
+     "technique": "session-registry",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/jobs.rs:203 No JobStatus enum (JobKind is closed, status is not). Finish writes the caller's status verbatim. Identity is minted correctly at jobs_enqueue.rs:91 (new_id), and the late-finish race is fenced, but the vocabulary and transition door are open."
+    },
+    {
+     "technique": "lifecycle-signals",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:180 Heartbeat kept apart from progress. The stale window is four missed heartbeats (lines 76-86). Reclaim is counted as stale_reclaims with a worker-lost error, never as a failure. Caveat: reclaim only runs inside claim, not on a timer, so with no worker polling a dead job still reads 'running'."
+    },
+    {
+     "technique": "evidence-outranks-a-liveness-claim",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:175 Uses the technique's preferred lease ladder: a dedicated renewal loop on a fixed cadence plus fencing (finish and renew are conditioned on claimed_at). The progress write (line 165) is unfenced, so fencing is not total."
+    },
+    {
+     "technique": "absent-status-passthrough",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:165 A progress report carries no status and updates only progress, so it never invents a transition. New rows are seeded 'queued', which is true."
+    },
+    {
+     "technique": "durable-fleet-state",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs_enqueue.rs:109 The store is authoritative (one of the designs the technique allows): the row is committed before the job is returned, and every transition is a single conditioned SQL statement, so a restart needs no mirror reconciliation."
+    },
+    {
+     "technique": "outbound-compute-plane",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:95 Runners pull work over the authenticated API (claim, renew, progress, finish) and never hold a DB connection, so executors need no ingress."
+    }
+   ],
+   "registryProposal": "The subject's precondition is agent sessions, but its registry, lifecycle and lease techniques fire just as strongly on a pull-based job queue of non-agent workers. The golden path could say whether a worker job queue is in scope or belongs wholly to background-jobs and job-coordination, so mappings like this one stop being judged by analogy."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-07T02:47:20.561359+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "heterogeneous-model-panels",
+    "parallel-dispatch",
+    "result-harvest",
+    "soft-budget-under-the-hard-cap"
+   ],
+   "deviations": 0,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T02:47:20.561359+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "fleet-orchestration"
+   ],
+   "techniques": [
+    "absent-status-passthrough",
+    "durable-fleet-state",
+    "evidence-outranks-a-liveness-claim",
+    "lifecycle-signals",
+    "outbound-compute-plane",
+    "session-registry"
+   ],
+   "deviations": 1,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

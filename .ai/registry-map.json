@@ -6434,7 +6434,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/runner/src/compare.rs:557 The run fans out in-process closures (a generate+judge cell per target and case) across a scoped thread pool, not autonomous agent sessions with a registry, lifecycle, hibernation or harvest from drop points; a case-insensitive search of crates/runner/src for agent, fleet, hibernat and worktree found no hits, so the subject's precondition (a fleet of agent sessions) does not hold here.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "quality-gates",
@@ -7672,7 +7676,11 @@
           "revision": 28,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/jobs.rs:203 The finish door takes the worker's status as a free string and writes it straight through (only the store's SQL guards against re-finishing done, failed or cancelled), so job status is not a closed vocabulary arbitrated by one transition door: a worker can 'finish' a job into running, queued or a misspelled state, and consumers such as the schedule sweep keep their own literal copies of the status set.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:93bd71853ab468b1",
+          "evaluatedRevision": 28
         },
         {
           "subject": "session-continuation",
