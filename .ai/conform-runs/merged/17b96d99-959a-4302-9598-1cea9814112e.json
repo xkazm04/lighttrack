@@ -1,0 +1,53 @@
+{
+ "schema": "conform-run/1",
+ "worker": "17b96d99-959a-4302-9598-1cea9814112e",
+ "subject": "trust-base",
+ "evaluatedAt": "2026-11-07T01:46:32.311105+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "typescript-sdk",
+   "subject": "trust-base",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/typescript/src/journal.ts:253 Crash-journal lines are decoded with JSON.parse straight into an `any` binding, then fields are read and the record is cast to JournalRecord. No type-aware lint (no eslint / @typescript-eslint no-unsafe-* config exists in the package or the repo CI) counts this flow, so these trust-base members are invisible to a directive census, and the technique's removal step (decode into `unknown` and narrow through one checker) is not taken here.",
+   "techniques": [
+    {
+     "technique": "census-counts-unmarked-members",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/journal.ts:253 Decoded JSON flows into `any` (also index.ts:215 parsed: any, index.ts:621 `as any`, admission.ts:221 `as any[]`). The package has no type-aware unsafe-flow lint, so nothing counts these members. Removal is partial: request() returns Promise<unknown>, but its caller re-widens the result to any."
+    },
+    {
+     "technique": "assumptions-are-build-errors",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/tsconfig.json:10 The only checker is tsc strict mode. No proof rests on a platform fact such as word size or endianness."
+    },
+    {
+     "technique": "verifier-footprint-stays-contained",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/package.json:22 The devDependencies are only @types/node, tsx and typescript. The package carries no prover or specification library, so nothing leaks into the published graph."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-07T01:46:32.311105+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "trust-base"
+   ],
+   "techniques": [
+    "assumptions-are-build-errors",
+    "census-counts-unmarked-members",
+    "verifier-footprint-stays-contained"
+   ],
+   "deviations": 1,
+   "context": "typescript-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

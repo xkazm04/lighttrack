@@ -7499,44 +7499,57 @@
       "subject": "trust-base",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-21",
-      "evaluatedTs": "2026-10-21T21:28:07.947Z",
-      "worker": "e34b4e06-db3c-4e18-85e2-551c49b7a0dd",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T01:46:32.311Z",
+      "worker": "17b96d99-959a-4302-9598-1cea9814112e",
       "techniques": [
-        {
-          "technique": "assumptions-are-build-errors",
-          "verdict": "not-applicable",
-          "evidence": "clients/typescript/src/admission.ts:80 The hash explicitly models 64-bit arithmetic using JavaScript BigInt; no proof or type-level argument depending on native platform width was found."
-        },
         {
           "technique": "census-counts-unmarked-members",
           "verdict": "deviation",
-          "evidence": "clients/typescript/src/contract.test.ts:39 JSON.parse introduces inferred any subsequently accessed through manifest.capabilities; package scripts and repository searches reveal no type-aware unsafe-flow census or separate annotated-callback count."
+          "evidence": "clients/typescript/src/journal.ts:253 Decoded JSON flows into `any` (also index.ts:215 parsed: any, index.ts:621 `as any`, admission.ts:221 `as any[]`). The package has no type-aware unsafe-flow lint, so nothing counts these members. Removal is partial: request() returns Promise<unknown>, but its caller re-widens the result to any."
         },
         {
-          "technique": "leaf-spec-states-what-callers-read",
+          "technique": "assumptions-are-build-errors",
           "verdict": "not-applicable",
-          "evidence": "clients/typescript/src/instrument.ts:21 This is an ordinary TypeScript function type; no prover-trusted body with a contract consumed by proofs was found."
-        },
-        {
-          "technique": "marker-impl-names-its-exclusion",
-          "verdict": "not-applicable",
-          "evidence": "clients/typescript/src/instrument.ts:25 The context mechanism uses ordinary JavaScript state; searches found no hand-written assertion overriding compiler thread-transfer or shared-access inference."
-        },
-        {
-          "technique": "soundness-argument-names-its-dependencies",
-          "verdict": "deviation",
-          "evidence": "clients/typescript/src/journal.ts:262 The assertion accepts a decoded object as JournalRecord after checking only its object shape and discriminator; neither the assertion nor SpanJournal.begin names their dependency on the producer preserving JournalRecord field types."
-        },
-        {
-          "technique": "trusted-leaf-gets-an-outside-test",
-          "verdict": "not-applicable",
-          "evidence": "clients/typescript/package.json:18 The package runs ordinary executable tests; no body marked trusted while its contract is consumed by proofs was found."
+          "evidence": "clients/typescript/tsconfig.json:10 The only checker is tsc strict mode. No proof rests on a platform fact such as word size or endianness."
         },
         {
           "technique": "verifier-footprint-stays-contained",
           "verdict": "not-applicable",
-          "evidence": "clients/typescript/package.json:25 The complete dependency declaration contains only TypeScript, tsx and Node typings as development dependencies; no prover or specification library is present."
+          "evidence": "clients/typescript/package.json:22 The devDependencies are only @types/node, tsx and typescript. The package carries no prover or specification library, so nothing leaks into the published graph."
+        },
+        {
+          "technique": "leaf-spec-states-what-callers-read",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/instrument.ts:21 This is an ordinary TypeScript function type; no prover-trusted body with a contract consumed by proofs was found.",
+          "carriedFrom": "2026-10-21"
+        },
+        {
+          "technique": "marker-impl-names-its-exclusion",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/instrument.ts:25 The context mechanism uses ordinary JavaScript state; searches found no hand-written assertion overriding compiler thread-transfer or shared-access inference.",
+          "carriedFrom": "2026-10-21"
+        },
+        {
+          "technique": "soundness-argument-names-its-dependencies",
+          "verdict": "deviation",
+          "evidence": "clients/typescript/src/journal.ts:262 The assertion accepts a decoded object as JournalRecord after checking only its object shape and discriminator; neither the assertion nor SpanJournal.begin names their dependency on the producer preserving JournalRecord field types.",
+          "carriedFrom": "2026-10-21"
+        },
+        {
+          "technique": "trusted-leaf-gets-an-outside-test",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/package.json:18 The package runs ordinary executable tests; no body marked trusted while its contract is consumed by proofs was found.",
+          "carriedFrom": "2026-10-21"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "clients/typescript/src/journal.ts:255 Decoded journal records flow through unchecked types without the required type-aware census, leaving trust-base members outside the package's checks.",
+          "evaluatedAt": "2026-10-21T21:28:07.947Z",
+          "worker": "e34b4e06-db3c-4e18-85e2-551c49b7a0dd",
+          "reason": "replaced by 17b96d99-959a-4302-9598-1cea9814112e"
         }
       ]
     },

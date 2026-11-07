@@ -8321,12 +8321,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "clients/typescript/src/journal.ts:255 Decoded journal records flow through unchecked types without the required type-aware census, leaving trust-base members outside the package's checks.",
-          "evaluatedAt": "2026-10-21",
-          "evaluatedAgainst": "sha256-b2:3ad9d5604e9627ce",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "clients/typescript/src/journal.ts:253 Crash-journal lines are decoded with JSON.parse straight into an `any` binding, then fields are read and the record is cast to JournalRecord. No type-aware lint (no eslint / @typescript-eslint no-unsafe-* config exists in the package or the repo CI) counts this flow, so these trust-base members are invisible to a directive census, and the technique's removal step (decode into `unknown` and narrow through one checker) is not taken here.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:0fd52192b37a88e4",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "module-design",
