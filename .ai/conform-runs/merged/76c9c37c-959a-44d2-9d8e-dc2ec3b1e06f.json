@@ -1,0 +1,124 @@
+{
+ "schema": "conform-run/1",
+ "worker": "76c9c37c-959a-44d2-9d8e-dc2ec3b1e06f",
+ "subject": "judge-calibration-and-drift",
+ "evaluatedAt": "2026-11-07T03:04:10.885968+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "judge-and-scoring",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/engine/src/judge.rs:559 The engine's only measure of the judge disagreeing with itself is one composite max-min spread over the weighted overall. Per-dimension spread is averaged away, and I found no repeatability floor anywhere in the repo, so the least repeatable (subjective) dimension stays hidden and no drift threshold has a floor under it.",
+   "techniques": [
+    {
+     "technique": "repeatability-floor",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/judge.rs:559 Agreement is computed over per-sample weighted overalls, so repeatability is measured per judge, never per dimension. A grep for 'repeatab' across crates/ found no floor measurement feeding drift thresholds."
+    },
+    {
+     "technique": "golden-set-agreement-measurement",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/judge.rs:73 In-context part only (self-consistency draws must be able to differ): multi-sample judging is drawn unpinned and stamped 'sampled' instead of N pinned draws billed N times. samples and samples_parsed are recorded on the outcome. The kappa math lives off-context in core/runner."
+    },
+    {
+     "technique": "judge-selection-by-spread",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/judge/batch.rs:194 Method-change part only: batching is a transport change scored by the same aggregate() code, and every batched verdict carries batch_size so a batched-vs-unbatched comparison can be refused. The bake-off by spread is not in this context."
+    },
+    {
+     "technique": "judge-replacement-bridge",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/judge.rs:439 Identity part: the outcome carries the model the provider reported, or 'deterministic' when no model ran. The judge client has no cross-model fallback ladder (retries are same-model), and a pairwise parse failure is an Err, never stored as a Tie."
+    },
+    {
+     "technique": "reference-ladder",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/prompts.rs:80 The judge scores output against a reference answer when expected is Some. I found no floor (known-worse) or reference-against-reference ceiling anywhere, so reference-anchored scores are read on the raw scale. Lower confidence: the reference here acts as an answer key rather than a fidelity target."
+    }
+   ]
+  },
+  {
+   "context": "firestore-eval-collective",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/src/labels.rs:168 The stored calibration verdict keeps the kappa bar but drops the binarization pass threshold, bias and pass rates that core's Agreement computes. The trust lookup is keyed only by (project, rubric, judge), so a moved pass threshold silently inherits an earlier kappa's trust.",
+   "techniques": [
+    {
+     "technique": "golden-set-agreement-measurement",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/labels.rs:163 Persists kappa, pearson, mae, rmse, n, kappa_bar and dataset_version (a frozen-set generation, which is good). It omits the pass threshold and the bias (both present on core Agreement), so a stored kappa travels without its threshold. Root cause is the CalibrationRecord type in core, which this backend mirrors."
+    },
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/labels.rs:169 The trusted flag is stored per (rubric, judge), and latest_calibration returns None for never-calibrated, keeping the third state separate. But the verdict does not record the binarization threshold, so its scope ignores threshold moves."
+    },
+    {
+     "technique": "scheduled-recalibration",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/labels.rs:202 Newest-first per (project, rubric, judge), so the previous cycle's kappa is the first match (step 1 of the cycle). Records are appended under fresh ids, never rewritten."
+    },
+    {
+     "technique": "reserved-rubric-persistence",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/labels.rs:24 Calibration history's primary home is a dedicated collection rather than score records under a reserved rubric. The runner (off-context, calibration_post.rs) still projects a reserved-rubric score to feed the score_drop detector, so the alert path is ridden but the history is not on the score dial."
+    },
+    {
+     "technique": "windowed-score-drop-alerting",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/alerts.rs:73 Delivery part only: a per-dedup-key cooldown is made atomic via guard docs, so a sustained regression produces one alert per incident window across replicas. The rolling detector itself lives in the API, off-context."
+    },
+    {
+     "technique": "judge-replacement-bridge",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/collective.rs:72 Collective leaderboard rows carry only a coarse judge family (deliberately, to limit fingerprinting) and can be 'mixed'. The doc key (contributor, provider, model, task_type) excludes the judge, so a re-contribution under a different judge upserts over the row: one series, two judges. benchmarks.rs does store the full judge_model."
+    }
+   ],
+   "registryProposal": "reserved-rubric-persistence assumes the reserved-rubric score is the system of record. This repo found that gates need a typed, queryable trust row (CalibrationRecord) and demoted the reserved-rubric score to a projection for the alert path only. The technique could name the 'typed record as the fact + score projection for trend/alert' variant and say when it is acceptable, provided the record carries the full metric family including the threshold."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-07T03:04:10.885968+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "golden-set-agreement-measurement",
+    "judge-replacement-bridge",
+    "judge-selection-by-spread",
+    "reference-ladder",
+    "repeatability-floor"
+   ],
+   "deviations": 1,
+   "context": "judge-and-scoring",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-07T03:04:10.885968+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "golden-set-agreement-measurement",
+    "judge-replacement-bridge",
+    "reserved-rubric-persistence",
+    "scheduled-recalibration",
+    "trust-bar-verdict",
+    "windowed-score-drop-alerting"
+   ],
+   "deviations": 1,
+   "context": "firestore-eval-collective",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

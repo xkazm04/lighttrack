@@ -10908,6 +10908,84 @@
         "at": "2026-11-07T02:56:20.447533+00:00",
         "reason": "reviewer (sonnet): The anchor line, storage.rs:4, records a deliberate operator decision (2026-08-24) that retention is unbounded, made visible through /v1/storage/status and Store `retention` (lib.rs:784). The deviation verdict treats that as an unrecorded gap. I also could not confirm that jobs.rs and schedules.rs k"
       }
+    },
+    "70358003-cc4e-4553-ba3c-e864f30850d1/judge-calibration-and-drift": {
+      "context": "judge-and-scoring",
+      "subject": "judge-calibration-and-drift",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T03:04:10.885Z",
+      "worker": "76c9c37c-959a-44d2-9d8e-dc2ec3b1e06f",
+      "techniques": [
+        {
+          "technique": "repeatability-floor",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/judge.rs:559 Agreement is computed over per-sample weighted overalls, so repeatability is measured per judge, never per dimension. A grep for 'repeatab' across crates/ found no floor measurement feeding drift thresholds."
+        },
+        {
+          "technique": "golden-set-agreement-measurement",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge.rs:73 In-context part only (self-consistency draws must be able to differ): multi-sample judging is drawn unpinned and stamped 'sampled' instead of N pinned draws billed N times. samples and samples_parsed are recorded on the outcome. The kappa math lives off-context in core/runner."
+        },
+        {
+          "technique": "judge-selection-by-spread",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge/batch.rs:194 Method-change part only: batching is a transport change scored by the same aggregate() code, and every batched verdict carries batch_size so a batched-vs-unbatched comparison can be refused. The bake-off by spread is not in this context."
+        },
+        {
+          "technique": "judge-replacement-bridge",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/judge.rs:439 Identity part: the outcome carries the model the provider reported, or 'deterministic' when no model ran. The judge client has no cross-model fallback ladder (retries are same-model), and a pairwise parse failure is an Err, never stored as a Tie."
+        },
+        {
+          "technique": "reference-ladder",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/prompts.rs:80 The judge scores output against a reference answer when expected is Some. I found no floor (known-worse) or reference-against-reference ceiling anywhere, so reference-anchored scores are read on the raw scale. Lower confidence: the reference here acts as an answer key rather than a fidelity target."
+        }
+      ]
+    },
+    "32c31d6e-f9fb-4806-855a-b6056d920f34/judge-calibration-and-drift": {
+      "context": "firestore-eval-collective",
+      "subject": "judge-calibration-and-drift",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T03:04:10.885Z",
+      "worker": "76c9c37c-959a-44d2-9d8e-dc2ec3b1e06f",
+      "techniques": [
+        {
+          "technique": "golden-set-agreement-measurement",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/labels.rs:163 Persists kappa, pearson, mae, rmse, n, kappa_bar and dataset_version (a frozen-set generation, which is good). It omits the pass threshold and the bias (both present on core Agreement), so a stored kappa travels without its threshold. Root cause is the CalibrationRecord type in core, which this backend mirrors."
+        },
+        {
+          "technique": "trust-bar-verdict",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/labels.rs:169 The trusted flag is stored per (rubric, judge), and latest_calibration returns None for never-calibrated, keeping the third state separate. But the verdict does not record the binarization threshold, so its scope ignores threshold moves."
+        },
+        {
+          "technique": "scheduled-recalibration",
+          "verdict": "conformant",
+          "evidence": "crates/store-firestore/src/labels.rs:202 Newest-first per (project, rubric, judge), so the previous cycle's kappa is the first match (step 1 of the cycle). Records are appended under fresh ids, never rewritten."
+        },
+        {
+          "technique": "reserved-rubric-persistence",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/labels.rs:24 Calibration history's primary home is a dedicated collection rather than score records under a reserved rubric. The runner (off-context, calibration_post.rs) still projects a reserved-rubric score to feed the score_drop detector, so the alert path is ridden but the history is not on the score dial."
+        },
+        {
+          "technique": "windowed-score-drop-alerting",
+          "verdict": "conformant",
+          "evidence": "crates/store-firestore/src/alerts.rs:73 Delivery part only: a per-dedup-key cooldown is made atomic via guard docs, so a sustained regression produces one alert per incident window across replicas. The rolling detector itself lives in the API, off-context."
+        },
+        {
+          "technique": "judge-replacement-bridge",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/collective.rs:72 Collective leaderboard rows carry only a coarse judge family (deliberately, to limit fingerprinting) and can be 'mixed'. The doc key (contributor, provider, model, task_type) excludes the judge, so a re-contribution under a different judge upserts over the row: one series, two judges. benchmarks.rs does store the full judge_model."
+        }
+      ],
+      "registryProposal": "reserved-rubric-persistence assumes the reserved-rubric score is the system of record. This repo found that gates need a typed, queryable trust row (CalibrationRecord) and demoted the reserved-rubric score to a projection for the alert path only. The technique could name the 'typed record as the fact + score projection for trend/alert' variant and say when it is acceptable, provided the record carries the full metric family including the threshold."
     }
   }
 }

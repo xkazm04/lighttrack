@@ -3960,7 +3960,11 @@
           "revision": 6,
           "changedAt": "2026-10-13",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/src/labels.rs:168 The stored calibration verdict keeps the kappa bar but drops the binarization pass threshold, bias and pass rates that core's Agreement computes. The trust lookup is keyed only by (project, rubric, judge), so a moved pass threshold silently inherits an earlier kappa's trust.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6
         },
         {
           "subject": "eval-harness",
@@ -4351,7 +4355,11 @@
           "revision": 6,
           "changedAt": "2026-10-13",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/judge.rs:559 The engine's only measure of the judge disagreeing with itself is one composite max-min spread over the weighted overall. Per-dimension spread is averaged away, and I found no repeatability floor anywhere in the repo, so the least repeatable (subjective) dimension stays hidden and no drift threshold has a floor under it.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6
         },
         {
           "subject": "generator-uncertainty-scoring",
