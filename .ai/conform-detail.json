@@ -10986,6 +10986,37 @@
         }
       ],
       "registryProposal": "reserved-rubric-persistence assumes the reserved-rubric score is the system of record. This repo found that gates need a typed, queryable trust row (CalibrationRecord) and demoted the reserved-rubric score to a projection for the alert path only. The technique could name the 'typed record as the fact + score projection for trend/alert' variant and say when it is acceptable, provided the record carries the full metric family including the threshold."
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/quality-gates": {
+      "context": "pg-evaluation-store",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T22:17:20.462Z",
+      "worker": "99f32c83-d21f-4d1f-9267-78f75847c1dc",
+      "techniques": [
+        {
+          "technique": "gate-liveness",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/tests/conformance.rs:2 Could-not-run is folded into pass everywhere. ci.yml:123 does set the URL today, but nothing routes a missing URL to fail where the green authorizes a merge. The rust--gate-liveness application describes exactly this 'green was fake' pattern."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/benchmarks.rs:97 A tiebreak on id makes the promotion gate's run order depend on the data, not on the query plan."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/calibrations.rs:51 A missing calibration surfaces as an explicit unknown state rather than compliance, and the IS NULL fix keeps real calibrations findable."
+        },
+        {
+          "technique": "prose-rule-drift",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/rubrics.rs:83 The 'mirrors SQLite column for column' rule is checked by a test with no database, not just stated."
+        }
+      ]
     }
   }
 }

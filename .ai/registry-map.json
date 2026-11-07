@@ -5048,7 +5048,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/tests/conformance.rs:2 The only gate that runs this context's Postgres code passes as a no-op when LIGHTTRACK_TEST_DATABASE_URL is unset, with no require-DB switch, so a CI job that loses the variable keeps the required check green while testing nothing.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "scoring-rubrics",

@@ -1,0 +1,65 @@
+{
+ "schema": "conform-run/1",
+ "worker": "99f32c83-d21f-4d1f-9267-78f75847c1dc",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-11-07T22:17:20.462778+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "pg-evaluation-store",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/tests/conformance.rs:2 The only gate that runs this context's Postgres code passes as a no-op when LIGHTTRACK_TEST_DATABASE_URL is unset, with no require-DB switch, so a CI job that loses the variable keeps the required check green while testing nothing.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/tests/conformance.rs:2 Could-not-run is folded into pass everywhere. ci.yml:123 does set the URL today, but nothing routes a missing URL to fail where the green authorizes a merge. The rust--gate-liveness application describes exactly this 'green was fake' pattern."
+    },
+    {
+     "technique": "blocking-by-input-determinism",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/benchmarks.rs:97 A tiebreak on id makes the promotion gate's run order depend on the data, not on the query plan."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/calibrations.rs:51 A missing calibration surfaces as an explicit unknown state rather than compliance, and the IS NULL fix keeps real calibrations findable."
+    },
+    {
+     "technique": "prose-rule-drift",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/rubrics.rs:83 The 'mirrors SQLite column for column' rule is checked by a test with no database, not just stated."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "quality-gates",
+   "context": "store-integration-tests",
+   "reason": "evidence leans on Architect/strong-patterns.md, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-07T22:17:20.462778+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "blocking-by-input-determinism",
+    "gate-liveness",
+    "prose-rule-drift",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
