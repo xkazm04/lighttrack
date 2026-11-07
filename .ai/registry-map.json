@@ -4256,7 +4256,11 @@
           "revision": 4,
           "changedAt": "2026-10-27",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/gateway/src/router.rs:15 The completions route spends the person's logged-in claude/codex seats, but nothing checks Host, Origin or X-Forwarded-For before it runs (a grep of crates/gateway for origin/host/forwarded/loopback finds only the default bind string), so a DNS-rebinding page on this machine can drive the seats.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:8c4e4cc37445b46c",
+          "evaluatedRevision": 4
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -8378,7 +8382,11 @@
           "revision": 4,
           "changedAt": "2026-10-27",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/index.ts:50 The SDK says it runs in browsers but takes a project key through `apiKey` with no note that a browser-held key is public. A project key can enqueue and read relay tasks (docs/RELAY.md), so a browser app that passes it publishes that power.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:8c4e4cc37445b46c",
+          "evaluatedRevision": 4
         },
         {
           "subject": "invariant-placement",
