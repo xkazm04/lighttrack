@@ -6063,7 +6063,11 @@
           "revision": 44,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "clients/python/lighttrack/instrument.py:3 The SDK is a telemetry wrapper. It intercepts the host application's already-built provider calls and records model, token counts and latency (instrument.py:183); it owns no assembler, template or transcript. A case-insensitive search of clients/python for system_prompt, template, compact, fingerprint and assemble found no hits, so the subject's precondition (a system that owns its assembler) does not hold here.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44
         },
         {
           "subject": "settings",

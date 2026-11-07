@@ -9896,31 +9896,31 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "unknown",
-      "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T03:48:40.680Z",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T00:35:48.811Z",
       "techniques": [
         {
           "technique": "variable-interpolation",
           "verdict": "deviation",
-          "evidence": "crates/api/src/prompts.rs:195 The template is admitted with no declared variable contract. The runner's renderer (crates/runner/src/targets.rs, outside this context) substitutes only `{{input}}`, so any other placeholder in a template would go to the model as literal syntax, and the registry door never rejects it."
+          "evidence": "crates/api/src/prompts.rs:196 The variable set is not declared or checked where the template lives. Free-form config is stored unvalidated, and placeholders other than {{input}} are neither refused at the door nor resolved at render time; they ship literally, which is the failure the technique names."
         },
         {
           "technique": "fingerprinting-and-cache-keys",
           "verdict": "conformant",
-          "evidence": "crates/api/src/prompts.rs:293 Each resolution returns a version stamp for an immutable, monotonically numbered version, and the stamp goes on traffic. The promotion gate also requires the run's own RESOLVED_PROMPT_VERSION (prompts_gate.rs:228), so a behaviour change can be traced to the prompt version that actually ran."
+          "evidence": "crates/api/src/prompts_gate.rs:10 An immutable, monotonic version number is the version stamp. The run records which version it actually generated with, and the promotion gate compares that stamp with the version being promoted (gate-sees-target). get_prompt also returns a `name@vN` tag (prompts.rs:293) to stamp on traffic."
         },
         {
           "technique": "deferred-interface-invalidation",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/prompts.rs:253 The registry holds no live conversation. A label promotion only changes what the next fetch resolves, so there is no mid-session rewrite of a standing layer to defer."
+          "evidence": "crates/api/src/prompts.rs:253 The registry holds no live conversation. A label promotion only changes what the next fetch resolves, so there is no mid-session rewrite of a standing layer to defer.",
+          "carriedFrom": "2026-11-04"
         }
       ],
-      "registryProposal": "The subject covers systems that own an assembler. It does not address a prompt registry that serves versioned templates to assemblers it does not own, where the variable contract would have to be declared with the stored template. The variable-interpolation technique could say whether that declaration duty transfers to the registry.",
       "withdrawn": {
-        "worker": "14df651a-8b75-4f1a-af83-45b3fc9f72df",
+        "worker": "088cac19-aced-413b-a103-1932cae61093",
         "state": "deviation",
-        "at": "2026-11-04T03:50:36.246633+00:00",
-        "reason": "reviewer (sonnet): Every anchor (crates/api/src/prompts.rs:195, :253, :293) is in prompts.rs, which is not among the evaluation-pipeline context files. The quoted lines are accurate, but the verdict is about the prompt-registry context, not this one."
+        "at": "2026-11-07T00:36:55.425489+00:00",
+        "reason": "reviewer (sonnet): The claim holds in the code (add_version stores content and config with no placeholder check, and render() in crates/runner/src/targets.rs only substitutes {{input}}). But crates/api/src/prompts.rs and prompts_gate.rs are not among the context's listed files, so the verdict describes the prompt regi"
       }
     },
     "00e9cbd9-1f34-4dbb-91be-6ad436bce75b/prompt-assembly": {
@@ -10659,6 +10659,16 @@
       "evaluatedAt": "2026-11-06",
       "evaluatedTs": "2026-11-06T23:47:09.690Z",
       "worker": "18f0786c-3193-4f2f-b8f1-930ba35266e2",
+      "techniques": []
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/prompt-assembly": {
+      "context": "python-sdk",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T00:35:48.811Z",
+      "worker": "088cac19-aced-413b-a103-1932cae61093",
       "techniques": []
     }
   }
