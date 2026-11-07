@@ -5760,12 +5760,11 @@
           "changedAt": "2026-10-27",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/engine/src/retry.rs:94 While with_retry_within implements jittered exponential backoff and respects stated delays, it discards attempt counts upon eventual success without recording attempts on outcomes or aggregating attempts-per-success metrics, hiding dependency degradation.",
-          "evaluatedAt": "2026-10-18",
-          "evaluatedAgainst": "sha256-b2:4ca1a8af506f44d9",
-          "evaluatedRevision": 13,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/engine/src/retry.rs:94 with_retry_within returns success without recording the attempt count. GenOutcome has no attempts field; the only attempts field in the crate is on OverBudgetWait. So an adapter that needs three tries per call looks the same as a healthy one, and attempts-per-success cannot be measured.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:0ff53fb3a87ad13c",
+          "evaluatedRevision": 14,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-cli-transport",

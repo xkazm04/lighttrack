@@ -7320,57 +7320,67 @@
       "subject": "retry-backoff",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-18",
-      "evaluatedTs": "2026-10-18T21:09:07.716Z",
-      "worker": "bed45f1e-f828-4aee-a70f-9d4f316e9ed8",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T01:07:16.474Z",
+      "worker": "16028d38-2131-421c-bb5c-db0d45cc5775",
       "techniques": [
-        {
-          "technique": "backoff-design",
-          "verdict": "conformant",
-          "evidence": "crates/engine/src/retry.rs:106 Exponential backoff doubles delay with jitter, respects provider-stated delays, and terminates with OverBudgetWait when stated delay exceeds remaining budget."
-        },
-        {
-          "technique": "circuit-breakers",
-          "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:320 Provider calls are dispatched through with_retry without an engine-level circuit breaker, repeatedly hammering failing providers across calls."
-        },
-        {
-          "technique": "client-retry-and-redirect-conventions",
-          "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:71 The HTTP client leaves redirect following to reqwest's 10-hop default without single-hop bounding or scheme downgrade checks, and retry termination is embedded in the loop."
-        },
-        {
-          "technique": "durable-retries",
-          "verdict": "not-applicable",
-          "evidence": "crates/engine/src/retry.rs:19 Provider candidate generation is ephemeral in-flight evaluation work bounded by a 60-second call budget where retries appropriately live only in-memory."
-        },
-        {
-          "technique": "error-classification-for-retry",
-          "verdict": "conformant",
-          "evidence": "crates/engine/src/providers.rs:124 Responses are mapped at the boundary into typed EngineError variants, separating transient rate limits and server errors from permanent failures and capturing stated delays."
-        },
-        {
-          "technique": "jittered-revocation-with-irrevocable-terminal",
-          "verdict": "not-applicable",
-          "evidence": "crates/engine/src/providers.rs:367 Provider generation acts as a consumer of external LLM APIs and does not issue leased credentials requiring revocation ladders or irrevocable terminal states."
-        },
         {
           "technique": "retry-observability",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/retry.rs:119 Ladder exhaustion returns the bare transient error without recording a distinct exhausted state, and successful retries discard attempt counts, hiding degradation."
+          "evidence": "crates/engine/src/retry.rs:94 Success after N attempts throws N away. Exhaustion is not recorded as its own state either: retry.rs:119 (`None => e,`) returns the last transient error, which looks the same as a first-attempt failure. Only the over-budget wait has its own terminal value."
+        },
+        {
+          "technique": "error-classification-for-retry",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:136 Classification is typed and done once at the boundary, which is good (http_error/send_error are shared by the gemini, openai, openrouter, anthropic_api and http_target adapters). But the fallback branch sends any unlisted status, such as 408, to BadRequest, which is permanent and also triggers the schema-shed fallback. send_error likewise sends unclassified transport errors to the non-retryable Http variant. There is no unknown class with a small retry allowance, and unknowns are not counted."
+        },
+        {
+          "technique": "backoff-design",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/retry.rs:132 Doubling ladder with saturating arithmetic. Each delay adds a random jitter of up to one rung (equal-jitter style, not a small ±10% wobble). MAX_TRIES and the 60 s CALL_BUDGET are separate stopping rules. A stated wait replaces the computed rung, gets up to 1 s of extra jitter, and counts against the budget. A stated wait that does not fit ends the ladder as OverBudgetWait carrying the requested seconds. The header list at providers.rs:82 is an ordered accept-list with the unit tied to each header name."
         },
         {
           "technique": "storm-control",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:253 Retries lack an aggregate fleet budget to cap volume, and layered fallbacks such as schema-shedding re-invoke generate_retrying, multiplying retry attempts across layers."
+          "evidence": "crates/engine/src/providers.rs:253 When the schema is rejected, the shed path starts a second full ladder with a fresh 60 s budget. It is not charged against the first ladder, so one intent can make up to 6 calls (generate_deterministic at line 305 does the same). There is no retry budget shared across the pool.rs parallel workers, so every worker ladders independently during a correlated outage."
+        },
+        {
+          "technique": "durable-retries",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/retry.rs:19 Every retry is in memory and bounded to one blocking call: at most 60 s and 3 tries. No retry is scheduled to outlive the process, so a persisted retry-at schedule is not needed."
+        },
+        {
+          "technique": "client-retry-and-redirect-conventions",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:66 This is a client for vendor LLM APIs and operator HTTP targets, not for a replicated or leader-redirecting server with a consistency index. Side observation: the builder sets no redirect policy, so reqwest's default redirect following applies."
+        },
+        {
+          "technique": "jittered-revocation-with-irrevocable-terminal",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/lib.rs:17 The only retries in this context are provider generation calls. The engine issues no credentials or leases, so there is nothing to revoke."
+        },
+        {
+          "technique": "circuit-breakers",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:320 Provider calls are dispatched through with_retry without an engine-level circuit breaker, repeatedly hammering failing providers across calls.",
+          "carriedFrom": "2026-10-18"
         },
         {
           "technique": "suspension-is-not-failure",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/providers.rs:146 Connection errors are collapsed with timeouts into EngineError::Timeout and retried as transient failures, burning attempts on blocked connection attempts without suspension."
+          "evidence": "crates/engine/src/providers.rs:146 Connection errors are collapsed with timeouts into EngineError::Timeout and retried as transient failures, burning attempts on blocked connection attempts without suspension.",
+          "carriedFrom": "2026-10-18"
         }
       ],
-      "registryProposal": "In multi-provider evaluation engines, distinguishing between per-request transient backoff (within engine adapters) and candidate-level circuit breaking (within matrix runners) should be clarified in the standard's scope hierarchy."
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/engine/src/retry.rs:94 While with_retry_within implements jittered exponential backoff and respects stated delays, it discards attempt counts upon eventual success without recording attempts on outcomes or aggregating attempts-per-success metrics, hiding dependency degradation.",
+          "evaluatedAt": "2026-10-18T21:09:07.716Z",
+          "worker": "bed45f1e-f828-4aee-a70f-9d4f316e9ed8",
+          "reason": "replaced by 16028d38-2131-421c-bb5c-db0d45cc5775"
+        }
+      ]
     },
     "8b5cad82-800d-4c90-90ea-f8a443723c81/session-continuation": {
       "context": "storage-and-jobs",
