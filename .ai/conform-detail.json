@@ -5310,47 +5310,57 @@
       "subject": "production-trace-scoring",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-15",
-      "evaluatedTs": "2026-10-15T04:29:43.708Z",
-      "worker": "1ce61358-5216-4459-a0df-35772633150f",
+      "evaluatedAt": "2026-11-07",
+      "evaluatedTs": "2026-11-07T00:19:29.282Z",
+      "worker": "d09b190d-f058-4a09-bdd2-d10650a28baa",
       "techniques": [
-        {
-          "technique": "settle-window-completion",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/score_traces.rs:223 Completed means newest event older than settle_secs, passed only as until. Searched the score-traces path for since, max_age, and max-age: the only other bound is limit, a per-cycle count, so a trace that never goes quiet is never judged. The per-event scorer correctly judges events that already have input and output with no window."
-        },
         {
           "technique": "stable-hash-sampling",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/score_traces.rs:322 FNV-1a is keyed on trace id, specified, and stable, rate <= 1 judges every trace, and the predicate is pure. Membership is still hash mod sample_every (CLI, default 1), which does not nest when N changes, and the score body does not stamp the rate."
+          "evidence": "crates/runner/src/score_traces.rs:322 The FNV-1a hash is stable and keyed on trace id, and the pure predicate is applied twice (lines 238 and 128), which is all correct. But this is the fixed-residue mod-N form that the technique names as the failure: the samples do not nest when N changes. The rate in force is also not stamped on the verdict."
         },
         {
           "technique": "errors-always-oversampling",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/score_traces.rs:318 The override is a bool flag, runs after already-scored and before the hash bucket, and is fed trace status == \"error\" (operational, not a judge score). No per-cycle cap; the loop states the judge is unbudgeted, which the technique allows. This loop prints per-trace lines, not a population mean; the admission stratum is still not stored on the row."
+          "evidence": "crates/runner/src/score_traces.rs:318 The override is an explicit --errors-always flag. It keys on the trace's own status (ts.status == \"error\") and sits below the already-scored short-circuit (line 315) and above the hash bucket, which is the order the technique requires. Caveats: there is no stated ceiling for surges, and the verdict does not record which stratum admitted the trace."
+        },
+        {
+          "technique": "settle-window-completion",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:113 A quiet window (--settle-secs, default 120s) is computed on every cycle and applied through until= on the trace's ended time. It is stateless, which is correct. But no maximum-age ceiling exists, so a trace that keeps emitting never falls before the cutoff and is never judged. The technique explicitly requires that ceiling."
         },
         {
           "technique": "verdict-coverage-receipt",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/score_traces.rs:16 The client posts the verdict and does not compose coverage. Confirmed the API stamps it on the root anchor (crates/api/src/traces.rs:263) from TraceCoverage spans, root_event_id, digest, and truncated (crates/core/src/trace.rs:101), and the trace read attaches stale without rewriting the row."
+          "evidence": "crates/runner/src/score_traces.rs:16 The runner does not compose the receipt itself. It posts to /v1/traces/:id/score and the server stamps the coverage. I checked crates/api/src/traces.rs:263 (`coverage: whole_trace.then(|| trace.coverage())`) and the FNV digest over the root exchange in crates/core/src/trace.rs:157-161."
         },
         {
           "technique": "drift-classified-rescoring",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/score_traces.rs:289 Only changed reopens spend; grown and a missing receipt still count as covering, the new verdict is appended, and one non-stale verdict closes the trace. Re-opened traces still pass through should_score. This file does not meter the changed rate."
+          "evidence": "crates/runner/src/score_traces.rs:289 Only `changed` drift reopens a trace for scoring. `grown` drift and verdicts without a receipt still count as covered. A corrected trace (stale verdict plus a fresh one) stays closed. Re-scores still pass through should_score, so they keep the sample gate. Tests at lines 409-438 pin all of this."
         },
         {
           "technique": "unscored-work-queue",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/score.rs:83 The event loop does ask the server, replacing the top-1000 client anti-join, but the query has no rubric, and list_unscored_events treats any score as scored. The trace loop still decides coverage in the client from the detail's score list (complete per trace, no SQL LIMIT, but not a server predicate)."
+          "evidence": "crates/runner/src/score.rs:83 The per-event queue is served by the server, but it is not scoped per rubric: Store::list_unscored_events (crates/store/src/lib.rs:1275) takes only project, prompt and limit. An event scored under any rubric therefore never enters the queue for a second rubric. The trace path has no server-side unscored queue at all. The client pages the newest `limit` settled traces and checks each trace's detail for scores, so traces already scored keep using up the window."
         },
         {
           "technique": "error-analysis-first-taxonomy",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/score_traces.rs:62 This loop judges under a caller-supplied rubric. Searched the runner scoring files for taxonomy, open-code, and saturation and found no trace-reading step that derives dimensions."
+          "evidence": "crates/runner/src/score_traces.rs:62 This loop judges under a caller-supplied rubric. Searched the runner scoring files for taxonomy, open-code, and saturation and found no trace-reading step that derives dimensions.",
+          "carriedFrom": "2026-10-15"
         }
       ],
-      "registryProposal": "The forged Rust applications still describe this mod-N is_multiple_of sample and the global unscored=1 event list as the realization. stable-hash-sampling allows mod-N only when the rate never moves, and unscored-work-queue requires a rubric-scoped server predicate; the drift application also documents only the quiet window, not settle-window-completion's maximum-age ceiling."
+      "registryProposal": "The rust--unscored-work-queue application says 'already scored' is checked against the rubric label throughout. That is true only for the whole-trace path (score_traces.rs). The per-event `?unscored=1` queue it uses as its main example is not rubric-scoped, so the application overstates conformance on the 'scope the queue per rubric' rule.",
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:322 Sample membership is a residue of the tunable sample_every rate, so changing N re-draws the admitted set instead of only adding traces, and the posted verdict does not record the rate that admitted it.",
+          "evaluatedAt": "2026-10-15T04:29:43.708Z",
+          "worker": "1ce61358-5216-4459-a0df-35772633150f",
+          "reason": "replaced by d09b190d-f058-4a09-bdd2-d10650a28baa"
+        }
+      ]
     },
     "70358003-cc4e-4553-ba3c-e864f30850d1/production-trace-scoring": {
       "context": "judge-and-scoring",

@@ -6540,12 +6540,11 @@
           "changedAt": "2026-10-25",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/runner/src/score_traces.rs:322 Sample membership is a residue of the tunable sample_every rate, so changing N re-draws the admitted set instead of only adding traces, and the posted verdict does not record the rate that admitted it.",
-          "evaluatedAt": "2026-10-15",
-          "evaluatedAgainst": "sha256-b2:65f1d14beed83924",
-          "evaluatedRevision": 7,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/runner/src/score_traces.rs:322 Trace sampling admits a trace when its hash leaves a remainder of zero mod N. Changing N therefore draws a new admitted set instead of only adding traces, and nothing in the posted score body (lines 172-178) records the rate or the stratum that admitted the trace, so verdicts cannot be reweighted correctly after N changes.",
+          "evaluatedAt": "2026-11-07",
+          "evaluatedAgainst": "sha256-b2:95adbc351991715b",
+          "evaluatedRevision": 8,
+          "revisionsBehind": 1
         },
         {
           "subject": "judge-contract-design",

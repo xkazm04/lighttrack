@@ -1,0 +1,72 @@
+{
+ "schema": "conform-run/1",
+ "worker": "d09b190d-f058-4a09-bdd2-d10650a28baa",
+ "subject": "production-trace-scoring",
+ "evaluatedAt": "2026-11-07T00:19:29.282186+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "runner-scoring-engine",
+   "subject": "production-trace-scoring",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/score_traces.rs:322 Trace sampling admits a trace when its hash leaves a remainder of zero mod N. Changing N therefore draws a new admitted set instead of only adding traces, and nothing in the posted score body (lines 172-178) records the rate or the stratum that admitted the trace, so verdicts cannot be reweighted correctly after N changes.",
+   "techniques": [
+    {
+     "technique": "stable-hash-sampling",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score_traces.rs:322 The FNV-1a hash is stable and keyed on trace id, and the pure predicate is applied twice (lines 238 and 128), which is all correct. But this is the fixed-residue mod-N form that the technique names as the failure: the samples do not nest when N changes. The rate in force is also not stamped on the verdict."
+    },
+    {
+     "technique": "errors-always-oversampling",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/score_traces.rs:318 The override is an explicit --errors-always flag. It keys on the trace's own status (ts.status == \"error\") and sits below the already-scored short-circuit (line 315) and above the hash bucket, which is the order the technique requires. Caveats: there is no stated ceiling for surges, and the verdict does not record which stratum admitted the trace."
+    },
+    {
+     "technique": "settle-window-completion",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score_traces.rs:113 A quiet window (--settle-secs, default 120s) is computed on every cycle and applied through until= on the trace's ended time. It is stateless, which is correct. But no maximum-age ceiling exists, so a trace that keeps emitting never falls before the cutoff and is never judged. The technique explicitly requires that ceiling."
+    },
+    {
+     "technique": "verdict-coverage-receipt",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/score_traces.rs:16 The runner does not compose the receipt itself. It posts to /v1/traces/:id/score and the server stamps the coverage. I checked crates/api/src/traces.rs:263 (`coverage: whole_trace.then(|| trace.coverage())`) and the FNV digest over the root exchange in crates/core/src/trace.rs:157-161."
+    },
+    {
+     "technique": "drift-classified-rescoring",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/score_traces.rs:289 Only `changed` drift reopens a trace for scoring. `grown` drift and verdicts without a receipt still count as covered. A corrected trace (stale verdict plus a fresh one) stays closed. Re-scores still pass through should_score, so they keep the sample gate. Tests at lines 409-438 pin all of this."
+    },
+    {
+     "technique": "unscored-work-queue",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score.rs:83 The per-event queue is served by the server, but it is not scoped per rubric: Store::list_unscored_events (crates/store/src/lib.rs:1275) takes only project, prompt and limit. An event scored under any rubric therefore never enters the queue for a second rubric. The trace path has no server-side unscored queue at all. The client pages the newest `limit` settled traces and checks each trace's detail for scores, so traces already scored keep using up the window."
+    }
+   ],
+   "registryProposal": "The rust--unscored-work-queue application says 'already scored' is checked against the rubric label throughout. That is true only for the whole-trace path (score_traces.rs). The per-event `?unscored=1` queue it uses as its main example is not rubric-scoped, so the application overstates conformance on the 'scope the queue per rubric' rule."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-07T00:19:29.282186+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "production-trace-scoring"
+   ],
+   "techniques": [
+    "drift-classified-rescoring",
+    "errors-always-oversampling",
+    "settle-window-completion",
+    "stable-hash-sampling",
+    "unscored-work-queue",
+    "verdict-coverage-receipt"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
