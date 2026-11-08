@@ -2192,33 +2192,77 @@
       "context": "claude-invocation-and-execution",
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
-      "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T04:09:27.257Z",
-      "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-08",
+      "evaluatedTs": "2026-11-08T23:34:18.497Z",
+      "worker": "dacb3127-a545-4bd1-ae09-b2984b86151d",
       "techniques": [
         {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/invocation/run.rs:168 The kill path has no Mode input and the error vocabulary has no unknown-outcome status. A killed Generate run is close to a pure read; a killed Edit run is the side-effecting case the technique names. Consumers confirm the harm: crates/agent/src/exec.rs:133 settles it failed (re-run up to max_attempts per docs/RELAY.md), and crates/responder/src/act.rs:95-101 commits whatever the killed run left."
+        },
+        {
           "technique": "guard-input-custody",
-          "verdict": "not-applicable",
-          "evidence": "crates/engine/src/invocation/tools.rs:12 Tool allowlists are compiled directly into binary code constants rather than loaded from files writable by the constrained subprocess."
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/invocation/posture.rs:124 Read-only is judged only over the argv allowlist, yet a non-bare scan runs in the workspace, and posture.rs:165 itself says CLAUDE.md, hooks or settings in a cwd are inherited. No setting-sources pin exists (repo grep: zero hits) and --bare requires an API key, so a seat scan cannot use it. Those policy inputs sit in a tree that committers and earlier Edit runs can write, and the writer set is not recorded beside the guard. How far project settings widen the allowlist is CLI behaviour I did not run. The Codex path does hold custody: --ignore-user-config, --ignore-rules, neutral cwd, and a fail-closed audit."
         },
         {
           "technique": "nested-run-is-not-its-parent",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/invocation/posture.rs:198 The launch door removes only the billing key; no prefix scrub exists (repo grep for CLAUDECODE|CLAUDE_CODE: zero hits; no env_clear in these dirs). A process launched from a Claude Code session carries CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_MESSAGING_SOCKET, CLAUDE_CODE_MESSAGING_TOKEN and CLAUDE_CODE_PLUGIN_DIRS (names observed in this session), and .claude/skills/gateway-onboard runs lt-runner from such a session. Daemon launchers are unaffected. The technique reports the environment half as harmless on one CLI; actual harm here is unmeasured."
+        },
+        {
+          "technique": "session-scoped-capability",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/invocation/posture.rs:169 Postures isolate single-turn generation subprocesses by executing within a neutral temp directory, but do not spawn or manage nested agent runs or child sessions."
+          "evidence": "crates/engine/src/invocation/posture.rs:189 The only environment-read capability is a credential, which the technique classes as a legitimate runtime fact; there is no client-surface capability here."
         },
         {
           "technique": "operator-tier-code-loading",
-          "verdict": "not-applicable",
-          "evidence": "crates/engine/src/codex/posture.rs:49 The Codex posture explicitly passes CLI flags disabling hooks, plugins, and multi-agent features on the subprocess rather than assembling an operator code-loading ladder."
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/codex/resolve.rs:24 Narrow finding: the only code-naming input in this seam is the child binary, set from startup env, CLI or local config (responder config.rs:93, runner main.rs:64, agent config.rs:46); crates/api has no claude_bin or codex_bin. The seam loads no in-process extensions, so the required-flag and isolation-wrapper rules have nothing to bind."
         },
         {
           "technique": "assembly-identity",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/invocation/posture.rs:55 Subprocess command plans format argv flags directly from the invocation struct without compiling an assembly identity digest over hook chains or rosters."
+          "evidence": "crates/engine/src/invocation/tools.rs:54 What is composed is a flat argv with no hook chain, so there is no assembly for a digest to identify; the seam computes no digest."
+        },
+        {
+          "technique": "semantic-hook-placement",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/codex/posture.rs:49 The seam composes no hook chain of its own; the Codex path turns the child's hooks off, and any Claude child hooks run inside the foreign CLI."
+        },
+        {
+          "technique": "activation-is-a-separate-mutation",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/codex/posture.rs:42 This seam performs no extension install or registration write; on the Codex path the plugin surface is disabled. Technique read through its opening sections only."
+        },
+        {
+          "technique": "additive-input-at-the-call-boundary",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:133 Input is one-shot: stdin closes after the prompt, so the seam has no mid-run input door."
+        },
+        {
+          "technique": "bounded-projection-of-external-work",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/sandbox/contree.rs:96 Sandbox work is a blocking call bounded by a wall clock; no remote handle is held across model turns."
+        },
+        {
+          "technique": "checkpoint-mode-custody",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/mod.rs:72 Each invocation is a single call with no durable conversation state; grep for checkpoint and resume across invocation, codex and sandbox found nothing."
         }
       ],
-      "registryProposal": "Clarify in the standard's scope boundary section that CLI subprocess wrappers executing headless agent processes belong to subprocess-lifecycle rather than agent-runtime-assembly."
+      "registryProposal": "The subject is framed around an in-process runtime, but a seam that launches a foreign agent CLI still has to meet guard-input-custody, nested-run-is-not-its-parent and indeterminate-closure-on-interruption while most other techniques have no surface. Name this launcher topology in the golden path's scope section, and say whether indeterminate closure binds a supervisor that kills a side-effecting child itself, since the technique is written around restart recovery.",
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:23 The invocation module is a subprocess spawner configuring CLI arguments and environment variables for external `claude` and `codex` binaries; grepping `crates/engine/src/invocation` and `codex` for `checkpoint`, `assembly`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, proving the absence of an in-process agent runtime pipeline.",
+          "evaluatedAt": "2026-10-13T04:09:27.257Z",
+          "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+          "reason": "replaced by dacb3127-a545-4bd1-ae09-b2984b86151d"
+        }
+      ]
     },
     "ae45e444-9735-4d0d-a66c-a946ba4d5e88/agent-runtime-assembly": {
       "context": "pg-platform-operations",

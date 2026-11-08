@@ -1564,13 +1564,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "not-applicable",
-          "evidence": "crates/engine/src/invocation/run.rs:23 The invocation module is a subprocess spawner configuring CLI arguments and environment variables for external `claude` and `codex` binaries; grepping `crates/engine/src/invocation` and `codex` for `checkpoint`, `assembly`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, proving the absence of an in-process agent runtime pipeline.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
-          "evaluatedRevision": 27,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "deviation",
+          "evidence": "crates/engine/src/invocation/run.rs:106 The one spawn door gives every killed child the same retryable Timeout whatever its Mode, so an Edit run whose side effects may have escaped is closed as an ordinary failure instead of an indeterminate outcome, and its consumers re-run it (relay retries) or commit its partial edits (responder ACT).",
+          "evaluatedAt": "2026-11-08",
+          "evaluatedAgainst": "sha256-b2:c29c78bbbf9eb4fe",
+          "evaluatedRevision": 29,
+          "revisionsBehind": 1
         },
         {
           "subject": "supply-chain",
