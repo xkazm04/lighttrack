@@ -836,7 +836,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/contract/src/endpoints/benchmarks.rs:21 The published contract makes a tier alias the default judge, and that alias resolves through a local roster table, so a roster revision changes the instrument behind every default-configured benchmark while its stored judge spec stays the same.",
+          "evaluatedAt": "2026-11-08",
+          "evaluatedAgainst": "sha256-b2:85554b740461b19e",
+          "evaluatedRevision": 39
         },
         {
           "subject": "agent-instruction-files",
@@ -5599,7 +5603,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/anon/Cargo.toml:6 The crate is a deterministic regex scrubber that depends only on regex and sha2 and runs no model against any scenario; a case-insensitive search of crates/anon for scenario, rubric, golden, candidate, trial and holdout found nothing, and its few 'judge' mentions are doc comments about a downstream reader.",
+          "evaluatedAt": "2026-11-08",
+          "evaluatedAgainst": "sha256-b2:85554b740461b19e",
+          "evaluatedRevision": 39
         },
         {
           "subject": "voice-io",
@@ -7953,7 +7961,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store/src/conformance/mod.rs:58 The suite's only input is a Store backend and it asserts deterministic round-trips, which the golden path assigns to the test-harness subject; a case-insensitive search of crates/store/src for scenario, trial and holdout found nothing, and its judge and rubric strings are fixture data being round-tripped rather than a model being scored.",
+          "evaluatedAt": "2026-11-08",
+          "evaluatedAgainst": "sha256-b2:85554b740461b19e",
+          "evaluatedRevision": 39
         }
       ],
       "governance": "governed"

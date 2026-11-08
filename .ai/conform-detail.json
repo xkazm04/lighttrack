@@ -9652,16 +9652,11 @@
       "context": "pii-scrubbing",
       "subject": "eval-harness",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T02:35:35.299Z",
-      "techniques": [],
-      "withdrawn": {
-        "worker": "9986ef3c-0cc8-4152-91c7-56ac0ad44281",
-        "state": "not-applicable",
-        "at": "2026-11-04T02:36:02.065383+00:00",
-        "reason": "reviewer (sonnet): The not-applicable is contradicted by the crate's own text: lib.rs:10-13, stamp.rs:5 and Cargo.toml:11 say scrubbing rewrites the evidence the judge reads, and stamp.rs records which rules did it. That makes it an instrument condition for eval validity, and lib.rs:6 is only a description line that d"
-      }
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-08",
+      "evaluatedTs": "2026-11-08T23:10:07.242Z",
+      "worker": "8d0543a5-ce22-40fc-ade4-5f547cdd0aad",
+      "techniques": []
     },
     "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/agent-runtime-assembly": {
       "context": "gateway-proxy",
@@ -11015,6 +11010,52 @@
           "technique": "prose-rule-drift",
           "verdict": "conformant",
           "evidence": "crates/store-pg/src/rubrics.rs:83 The 'mirrors SQLite column for column' rule is checked by a test with no database, not just stated."
+        }
+      ]
+    },
+    "b17dade9-c8d8-4e0c-9ca0-d782694902e4/eval-harness": {
+      "context": "store-conformance-observability",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-08",
+      "evaluatedTs": "2026-11-08T23:10:07.242Z",
+      "worker": "8d0543a5-ce22-40fc-ade4-5f547cdd0aad",
+      "techniques": []
+    },
+    "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/eval-harness": {
+      "context": "api-endpoint-table",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-08",
+      "evaluatedTs": "2026-11-08T23:10:07.242Z",
+      "worker": "8d0543a5-ce22-40fc-ade4-5f547cdd0aad",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/contract/src/endpoints/benchmarks.rs:21 The technique says never an alias and names a tier constant as an alias with a local spelling; engine resolve_model maps opus to claude-opus-5, which is undated. The rest of the table is strong: labels.rs:117 keeps trust per rubric and scores.rs:101-102 refuses a regression across different instruments."
+        },
+        {
+          "technique": "failure-signatures-beside-the-pass-rate",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/scores.rs:100 The regression response gives case counts per failure family with a denominator, and a family that could not fire reads not_measured rather than zero."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/datasets.rs:175 Frozen sets are extended by forking to a new version rather than edited, so a finished run keeps the corpus it was scored against."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/scores.rs:60 Absolute, matrix and pairwise verdicts are separate kinds a reader can filter on, so one mode's numbers need not stand in for another's."
+        },
+        {
+          "technique": "candidate-write-access",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/benchmarks.rs:163 Covers this one write surface only: the scorecard door is machine-only with no MCP tool. Holdouts and the full read/write enumeration are not expressed in the table."
         }
       ]
     }
