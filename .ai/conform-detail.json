@@ -1374,27 +1374,31 @@
       "subject": "mcp-tools",
       "bundle": "software-engineering",
       "state": "unknown",
-      "evaluatedAt": "2026-11-04",
-      "evaluatedTs": "2026-11-04T03:21:39.834Z",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T00:46:45.087Z",
       "techniques": [
+        {
+          "technique": "transport-selection",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:18 Requests are in-process HTTP calls into the axum Router; neither a stdio nor a streamable-HTTP tool transport is exercised."
+        },
+        {
+          "technique": "authentication-and-scoping",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:14 This is the REST API's bearer check; the tests never pass through a tool dispatch door, so the technique's per-call tool authorization is not what they cover."
+        },
         {
           "technique": "server-composition",
           "verdict": "not-applicable",
           "evidence": "crates/api/src/tests_capabilities.rs:35 Tests verify Axum router endpoints directly via HTTP request handling and do not test MCP server composition.",
           "carriedFrom": "2026-10-13"
-        },
-        {
-          "technique": "transport-selection",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/tests_capabilities.rs:11 Precondition does not hold as tests use in-memory tower oneshot HTTP rather than stdio or SSE MCP transports.",
-          "carriedFrom": "2026-10-13"
         }
       ],
       "withdrawn": {
-        "worker": "4d56ea5a-8dbe-48dd-9340-448ac927355e",
+        "worker": "4d3e31eb-27c2-41a1-87b9-013fb857cb3f",
         "state": "not-applicable",
-        "at": "2026-11-04T03:22:18.065087+00:00",
-        "reason": "reviewer (sonnet): The claim that the mcp hits are all in files outside this context could not be confirmed: only 12 of the 25 context files are listed. The alphabetical listing stops at tests_labels.rs, so tests_limits_preview.rs (which would sort next) may be in the context. That file tests an MCP tool's read-only h"
+        "at": "2026-11-09T00:47:07.178178+00:00",
+        "reason": "reviewer (sonnet): The evidence says `mcp` and `tool` appear in none of the test files, but crates/api/src/tests_limits_preview.rs:237 and :311 talk about the MCP tool's `readOnlyHint` and 'a read tool', and crates/api/src/benchmarks_regression/tests.rs:100-105 asserts `mcp.read_only`, so the no-tool-surface claim doe"
       }
     },
     "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/mcp-tools": {
