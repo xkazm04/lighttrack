@@ -11154,6 +11154,98 @@
           "evidence": "crates/store/src/sqlite/score_summary.rs:71 Buckets return with n and a 95% interval and no ORDER BY; this layer publishes no order for the precondition to guard."
         }
       ]
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/agent-instruction-files": {
+      "context": "mcp-server",
+      "subject": "agent-instruction-files",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T00:28:31.855Z",
+      "worker": "ee6f4712-6cca-4d7d-b7e4-bb30c29efc4a",
+      "techniques": [
+        {
+          "technique": "enforcement-demotion",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/rpc.rs:1 Could a program decide compliance? Yes (clippy::print_stdout), and CI already runs clippy -D warnings, but this restriction lint is not enabled. The rule lives in CLAUDE.md:97, CONTRIBUTING.md:142 and code comments. The write gate, by contrast, IS demoted (crates/contract/src/mcp.rs:158), so the gap is the stdout rule."
+        },
+        {
+          "technique": "capability-coverage-contract",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:212 Prompts name tools in prose and the only check is this named form. `tool_names()` exists but is used only by the duplicate-name test, so no test iterates the registry against prompt pointers. A missing gate, not a live break: all 11 named tools resolve and are read-only in tool-contract.json (checked 2026-11-09)."
+        },
+        {
+          "technique": "capability-before-steering",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/relay_tools.rs:1 An agent that could not inspect relay tasks got tools, not a steering line: a capability gap closed with a capability."
+        },
+        {
+          "technique": "context-reset-redelivery",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/rpc.rs:15 The initialize result carries no instructions field, so the server injects no session floor to go stale; prompts are composed per prompts/get."
+        },
+        {
+          "technique": "host-contract-compilation",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:3 One wire protocol and one render for every client; no per-host skill compilation exists here."
+        },
+        {
+          "technique": "inherited-default-ownership",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:35 The write surface is decided by the server's own flag rather than borrowed from a harness default; no repo behaviour here leans on a host default."
+        },
+        {
+          "technique": "instruction-freshness",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/relay_tools.rs:7 The cited rule resolves at CLAUDE.md:99-100, and the CLAUDE.md claims about this crate hold: no store dependency in Cargo.toml, no key-minting tool in the pin, writes gated."
+        },
+        {
+          "technique": "line-earning",
+          "verdict": "conformant",
+          "evidence": "CLAUDE.md:100 A deliberate exclusion with its reason: an absent tool does not reveal the rule that keeps it absent, so the line is unreachable from the tree and behaviour-changing."
+        },
+        {
+          "technique": "listing-tier-by-initiator",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/prompts.rs:1 Listing tier is a consumer-side harness setting; the server has no field to declare one."
+        },
+        {
+          "technique": "machine-owned-regions",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/tool_contract.rs:15 tool-contract.json is a whole-file derived pin outside any instruction file; no generated block sits inside a hand-written instruction file in this context."
+        },
+        {
+          "technique": "principal-tier-gating",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/tools.rs:111 The tier here is a process flag, not a prose section addressed to principals, so the technique's marked-section precondition does not hold."
+        },
+        {
+          "technique": "restraint-amplifier-balance",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:76 The prompts push toward checkable output rather than prohibiting; this one licenses a volunteered recommendation with a stated condition."
+        },
+        {
+          "technique": "rewrite-behavior-pinning",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/tool_contract.rs:11 No bulk or machine rewrite of these assets is in play. If one were proposed, this shape-only pin would not cover it."
+        },
+        {
+          "technique": "single-source-topology",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tools.rs:3 Agent-facing tool text now has one authority, the contract table, instead of four forks."
+        },
+        {
+          "technique": "workspace-ancestry-isolation",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:4 A thin HTTP client creates no workspace and launches no agent, so it has no governed span to isolate."
+        },
+        {
+          "technique": "write-back-sink-class",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/prompts.rs:6 The prompts name no destination for an agent to append to."
+        }
+      ],
+      "registryProposal": "capability-coverage-contract's 'when not to use' clause (small, stable capability set) does not say which size counts when a handful of prompts points into a large, growing catalog: here 7 prompts name 11 of 70 tools. The clause could name the pointer surface or the registry explicitly."
     }
   }
 }

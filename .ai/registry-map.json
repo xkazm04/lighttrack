@@ -4591,7 +4591,11 @@
           "revision": 31,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/mcp/src/rpc.rs:1 The always-must-hold stdout rule is a machine-decidable banned-call rule carried only as prose: `print_stdout` and `disallowed-macros` appear nowhere in the repo and crates/mcp has no tests directory, so today's zero `println!` calls are held by habit, and one stray call would corrupt the protocol channel with no gate firing.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:9b02cf004a7ce444",
+          "evaluatedRevision": 32
         },
         {
           "subject": "agent-runtime-assembly",
