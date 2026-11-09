@@ -3983,7 +3983,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/src/labels.rs:171 insert_calibration writes through put_doc, a PATCH upsert that rest.rs itself calls a silent overwrite on an insert path, and POST calibrations keeps a client-supplied id (crates/api/src/labels.rs:196), so re-posting an existing id rewrites a past judge-drift measurement where SQLite answers Conflict.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:85554b740461b19e",
+          "evaluatedRevision": 39
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -7335,7 +7339,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/scores.rs:39 A verdict is tied to its scenario only by a 1-based position (the schema documents case_index that way, and scores has no dataset-item column), and the regression diff pairs runs on that position, so a changed case list compares different scenarios under one index.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:85554b740461b19e",
+          "evaluatedRevision": 39
         },
         {
           "subject": "embedded-db",

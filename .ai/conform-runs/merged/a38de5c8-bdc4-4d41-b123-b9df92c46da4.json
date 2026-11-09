@@ -1,0 +1,99 @@
+{
+ "schema": "conform-run/1",
+ "worker": "a38de5c8-bdc4-4d41-b123-b9df92c46da4",
+ "subject": "eval-harness",
+ "evaluatedAt": "2026-11-09T00:06:43.563475+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "firestore-eval-collective",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/src/labels.rs:171 insert_calibration writes through put_doc, a PATCH upsert that rest.rs itself calls a silent overwrite on an insert path, and POST calibrations keeps a client-supplied id (crates/api/src/labels.rs:196), so re-posting an existing id rewrites a past judge-drift measurement where SQLite answers Conflict.",
+   "techniques": [
+    {
+     "technique": "judge-stability",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/labels.rs:171 Drift is read from the calibration history, and this write can replace a row in it; rest.rs offers create_doc with exists=false, which this path does not use."
+    },
+    {
+     "technique": "scenario-design",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/datasets.rs:94 No order key, and item ids are UUIDv4 document ids. Firestore's default order is by document name, so adding a case to an unfrozen dataset can land mid-list and shift later positions. The runner assigns case_index from this order and the regression diff joins runs on it, with no check of dataset version."
+    },
+    {
+     "technique": "resolution-precondition",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:120 The store returns collective rows unsorted and publishes no order; any ranking is made above this layer."
+    }
+   ]
+  },
+  {
+   "context": "sqlite-observability-backend",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/scores.rs:39 A verdict is tied to its scenario only by a 1-based position (the schema documents case_index that way, and scores has no dataset-item column), and the regression diff pairs runs on that position, so a changed case list compares different scenarios under one index.",
+   "techniques": [
+    {
+     "technique": "scenario-design",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/datasets.rs:113 This query has no ORDER BY although the position derives from it and two indexes can serve it, the same plan-dependence benchmarks.rs documents for list_runs. Dataset version and frozen state exist, but the standard names positional identity as the failure and asks for a stable id on the scored case."
+    },
+    {
+     "technique": "judge-stability",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/calibrations.rs:3 Judged only for this store's slice: append-only drift history, with a duplicate id refused as Conflict at line 47. Whether judge instructions are versioned belongs to the engine and runner and was not settled here."
+    },
+    {
+     "technique": "resolution-precondition",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/sqlite/score_summary.rs:71 Buckets return with n and a 95% interval and no ORDER BY; this layer publishes no order for the precondition to guard."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "eval-harness",
+   "context": "economics-margin-pricing",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-11-09T00:06:43.563475+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "judge-stability",
+    "resolution-precondition",
+    "scenario-design"
+   ],
+   "deviations": 1,
+   "context": "firestore-eval-collective",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-11-09T00:06:43.563475+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "judge-stability",
+    "resolution-precondition",
+    "scenario-design"
+   ],
+   "deviations": 1,
+   "context": "sqlite-observability-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
