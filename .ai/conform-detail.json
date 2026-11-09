@@ -11349,6 +11349,16 @@
         "at": "2026-11-09T01:23:46.816286+00:00",
         "reason": "reviewer (sonnet): The deviation anchors on rotate_key in crates/api/src/projects_keys.rs, which is not among this context's files (crates/store/src/sqlite/*). The missing transaction or compensating revoke is in the API handler's composition of two store calls. The store anchors (projects.rs:162, :177, devices.rs:52)"
       }
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/probe-confirmed-model-proposals": {
+      "context": "provider-generation",
+      "subject": "probe-confirmed-model-proposals",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T22:06:56.394Z",
+      "worker": "24e52c17-e309-4eda-acdc-da3da40233c4",
+      "techniques": []
     }
   }
 }

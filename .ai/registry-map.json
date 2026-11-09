@@ -5922,7 +5922,11 @@
           "revision": 2,
           "changedAt": "2026-11-03",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:1 This context only routes calls that generate candidate output for benchmarks (and endpoint_probe.rs fingerprints an endpoint the operator configured), so no model output is ever saved as configuration; I searched crates/engine (src, providers/, tests) and every Rust file under crates/ for proposal/propose/fact_pack/scratch and found nothing.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:e7d20c5fbd4d87e5",
+          "evaluatedRevision": 2
         }
       ],
       "governance": "governed"
