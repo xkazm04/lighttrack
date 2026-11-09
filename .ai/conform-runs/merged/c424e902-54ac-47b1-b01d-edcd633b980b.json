@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c424e902-54ac-47b1-b01d-edcd633b980b",
+ "subject": "supply-chain",
+ "evaluatedAt": "2026-11-09T23:00:15.930487+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "supply-chain",
+   "context": "runner-worker-pipeline",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}
