@@ -856,7 +856,11 @@
           "revision": 31,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:30 This context is a static Rust table of HTTP Endpoint rows that neither authors, loads, generates nor launches agents against an instruction file, and a case-insensitive ripgrep of the whole crates/contract tree for CLAUDE.md, AGENTS.md, guidance, harness and frontmatter found zero hits, so the subject's precondition does not hold (the map's match came from the tokens contract, tool and rule); the agent-facing MCP descriptions in its rows are tool metadata governed by the separately paired mcp-tools subject.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:9b02cf004a7ce444",
+          "evaluatedRevision": 32
         },
         {
           "subject": "prompt-assembly",

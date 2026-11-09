@@ -11250,6 +11250,58 @@
         }
       ],
       "registryProposal": "capability-coverage-contract's 'when not to use' clause (small, stable capability set) does not say which size counts when a handful of prompts points into a large, growing catalog: here 7 prompts name 11 of 70 tools. The clause could name the pointer surface or the registry explicitly."
+    },
+    "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/agent-instruction-files": {
+      "context": "api-endpoint-table",
+      "subject": "agent-instruction-files",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T01:06:30.143Z",
+      "worker": "0821995f-c3f0-41cb-892d-1a8f6acf8261",
+      "techniques": [
+        {
+          "technique": "line-earning",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/scores.rs:15 Rationale here is a code comment read only when this file is opened, not a line in an always-loaded floor, so the admission test has nothing to admit."
+        },
+        {
+          "technique": "enforcement-demotion",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:1 The context obeys a prose rule but does not carry it; whether that rule should be a gate is a finding about the instruction file, recorded in notes."
+        },
+        {
+          "technique": "single-source-topology",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:27 The split is of endpoint rows, not of guidance across harness files; no canonical file or bridge exists in this context."
+        },
+        {
+          "technique": "machine-owned-regions",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:29 The table is hand-written source consumed by generators; a search of the directory for BEGIN, <!--, @generated and auto-generated found no fenced machine region."
+        },
+        {
+          "technique": "instruction-freshness",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:28 The undated count sits in a code comment explaining a design choice, outside the trusted instruction layer this technique audits."
+        },
+        {
+          "technique": "capability-coverage-contract",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/alerts.rs:123 The table is the runtime's capability enumeration, not an instruction surface that plans work; the completeness obligation falls on planning documents elsewhere."
+        },
+        {
+          "technique": "sibling-floor-ownership",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/observability.rs:76 This is a listing entry a tool server publishes; the technique is an owner's audit of what is installed, which a publisher's versioned table cannot perform."
+        },
+        {
+          "technique": "listing-tier-by-initiator",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/jobs.rs:63 The table records who calls an HTTP route, but MCP tools are selected by the model, so the person-started listing tiers have no entry to sort here."
+        }
+      ],
+      "registryProposal": "sibling-floor-ownership names tool servers and listing-tier-by-initiator says to declare the tier beside the capability's own definition, yet both are framed from the consumer's side; one sentence stating what a repository that publishes a tool catalog owes, or that the mcp-tools subject owns it, would remove the ambiguity for tables like this one."
     }
   }
 }
