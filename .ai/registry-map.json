@@ -2787,7 +2787,11 @@
           "revision": 2,
           "changedAt": "2026-11-03",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:180 lt-agent's only verdict on a run is a relay settle status (succeeded/failed/deferred), reported to the cloud for lease and retry bookkeeping. An `edit` action does change files in an operator-named workspace, but nothing in this context opens that change to a merge gate or accepts or refuses it on evidence. Searches of crates/agent for merge, inconclusive, weaken, pull request, exploit and proof_class found nothing, and no proof block, merge gate or inconclusive verdict exists anywhere in crates/**/*.rs.",
+          "evaluatedAt": "2026-11-09",
+          "evaluatedAgainst": "sha256-b2:472e39b0fe4e3a6b",
+          "evaluatedRevision": 2
         },
         {
           "subject": "fleet-orchestration",

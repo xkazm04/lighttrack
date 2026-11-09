@@ -1,0 +1,73 @@
+{
+ "schema": "conform-run/1",
+ "worker": "31c696f7-7d8f-4922-9256-8c0ce154680a",
+ "subject": "proof-carrying-agent-actions",
+ "evaluatedAt": "2026-11-09T22:20:43.569156+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "device-relay-agent",
+   "subject": "proof-carrying-agent-actions",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/agent/src/exec.rs:180 lt-agent's only verdict on a run is a relay settle status (succeeded/failed/deferred), reported to the cloud for lease and retry bookkeeping. An `edit` action does change files in an operator-named workspace, but nothing in this context opens that change to a merge gate or accepts or refuses it on evidence. Searches of crates/agent for merge, inconclusive, weaken, pull request, exploit and proof_class found nothing, and no proof block, merge gate or inconclusive verdict exists anywhere in crates/**/*.rs.",
+   "techniques": [
+    {
+     "technique": "claims-never-decide",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/exec.rs:140 The CLI's own envelope decides whether the run succeeded. That is a run status, not permission for a change to land, and no proof block exists for a claim to slip into."
+    },
+    {
+     "technique": "proof-class-bound-to-action-class",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/actions.rs:36 Actions are typed by posture (generate, readonly-scan or edit), which sets which tools and workspace a run may use. They are not typed by proof class, because no proof is owed."
+    },
+    {
+     "technique": "evidence-binds-to-the-measured-change",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/report.rs:38 The report records which prompt ran, not base and head commits or a digest of the change. Nothing stores a verdict for a merge gate to read later."
+    },
+    {
+     "technique": "inconclusive-routes-to-wait",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/run.rs:138 The only three-valued verdict here is about lease ownership, where unknown means try again. In spirit that matches the rule, but it is not a proof verdict."
+    },
+    {
+     "technique": "negative-fixtures-prove-the-verifier",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/exec/tests.rs:121 Tests check that the posture gate both refuses and admits. There is no proof verifier for negative fixtures to exercise."
+    }
+   ],
+   "absenceTerms": [
+    "merge",
+    "inconclusive",
+    "weaken",
+    "pull request",
+    "exploit"
+   ],
+   "registryProposal": "The subject's precondition is an agent change that a gate must accept or refuse. A device-side runner that lets an agent edit a local repository and then reports success only from the CLI exit sits right at that boundary. The standard could say whether such a runner owes the 'a person decides' route, for example by marking edit-mode outcomes as unreviewed rather than succeeded, or whether it is fully out of scope."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-11-09T22:20:43.569156+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "proof-carrying-agent-actions"
+   ],
+   "techniques": [
+    "claims-never-decide",
+    "evidence-binds-to-the-measured-change",
+    "inconclusive-routes-to-wait",
+    "negative-fixtures-prove-the-verifier",
+    "proof-class-bound-to-action-class"
+   ],
+   "deviations": 0,
+   "context": "device-relay-agent",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

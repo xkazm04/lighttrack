@@ -11359,6 +11359,43 @@
       "evaluatedTs": "2026-11-09T22:06:56.394Z",
       "worker": "24e52c17-e309-4eda-acdc-da3da40233c4",
       "techniques": []
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/proof-carrying-agent-actions": {
+      "context": "device-relay-agent",
+      "subject": "proof-carrying-agent-actions",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T22:20:43.569Z",
+      "worker": "31c696f7-7d8f-4922-9256-8c0ce154680a",
+      "techniques": [
+        {
+          "technique": "claims-never-decide",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:140 The CLI's own envelope decides whether the run succeeded. That is a run status, not permission for a change to land, and no proof block exists for a claim to slip into."
+        },
+        {
+          "technique": "proof-class-bound-to-action-class",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/actions.rs:36 Actions are typed by posture (generate, readonly-scan or edit), which sets which tools and workspace a run may use. They are not typed by proof class, because no proof is owed."
+        },
+        {
+          "technique": "evidence-binds-to-the-measured-change",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/report.rs:38 The report records which prompt ran, not base and head commits or a digest of the change. Nothing stores a verdict for a merge gate to read later."
+        },
+        {
+          "technique": "inconclusive-routes-to-wait",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:138 The only three-valued verdict here is about lease ownership, where unknown means try again. In spirit that matches the rule, but it is not a proof verdict."
+        },
+        {
+          "technique": "negative-fixtures-prove-the-verifier",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec/tests.rs:121 Tests check that the posture gate both refuses and admits. There is no proof verifier for negative fixtures to exercise."
+        }
+      ],
+      "registryProposal": "The subject's precondition is an agent change that a gate must accept or refuse. A device-side runner that lets an agent edit a local repository and then reports success only from the CLI exit sits right at that boundary. The standard could say whether such a runner owes the 'a person decides' route, for example by marking edit-mode outcomes as unreviewed rather than succeeded, or whether it is fully out of scope."
     }
   }
 }
