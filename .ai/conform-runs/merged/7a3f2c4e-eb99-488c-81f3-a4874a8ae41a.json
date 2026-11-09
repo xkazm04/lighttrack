@@ -1,0 +1,37 @@
+{
+  "schema": "conform-run/1",
+  "worker": "7a3f2c4e-eb99-488c-81f3-a4874a8ae41a",
+  "subject": "dynamic-secret-lifecycle",
+  "evaluatedAt": "2026-11-09T01:23:21.602402+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [],
+  "declined": [
+    {
+      "subject": "dynamic-secret-lifecycle",
+      "context": "sqlite-platform-backend",
+      "reason": "withdrawn after review: reviewer (sonnet): The deviation anchors on rotate_key in crates/api/src/projects_keys.rs, which is not among this context's files (crates/store/src/sqlite/*). The missing transaction or compensating revoke is in the API handler's composition of two store calls. The store anchors (projects.rs:162, :177, devices.rs:52)"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-11-09T01:23:21.602402+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "dynamic-secret-lifecycle"
+      ],
+      "techniques": [
+        "expiry-buffer-beyond-lease",
+        "idempotent-revoke-and-give-up",
+        "lease-vs-native-tracking",
+        "persist-before-provision",
+        "ttl-ladder-derivation",
+        "wal-per-external-side-effect"
+      ],
+      "deviations": 1,
+      "context": "sqlite-platform-backend",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}

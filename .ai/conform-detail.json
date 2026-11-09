@@ -11302,6 +11302,53 @@
         }
       ],
       "registryProposal": "sibling-floor-ownership names tool servers and listing-tier-by-initiator says to declare the tier beside the capability's own definition, yet both are framed from the consumer's side; one sentence stating what a repository that publishes a tool catalog owes, or that the mcp-tools subject owns it, would remove the ambiguity for tables like this one."
+    },
+    "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/dynamic-secret-lifecycle": {
+      "context": "sqlite-platform-backend",
+      "subject": "dynamic-secret-lifecycle",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-11-09",
+      "evaluatedTs": "2026-11-09T01:23:21.602Z",
+      "techniques": [
+        {
+          "technique": "persist-before-provision",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/projects_keys.rs:305 Issuer-is-verifier case, so the rule moves to the handout. Plain mint is fine: the insert precedes the response and store errors propagate (projects.rs create_key). In rotate_key, mint() has already inserted the successor (line 292); the `?` here, the same on the ExpireAt branch at 307, and the not-found return at 310-311 all exit without revoking it, and the plaintext inside `successor` is dropped. The store offers no atomic rotate verb. The successor inherits old.expires_at, so with None it never expires; it does appear in list_keys."
+        },
+        {
+          "technique": "idempotent-revoke-and-give-up",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/projects.rs:162 Purely local revocation, so only the first rule holds. Re-revoking matches the row and reports true, with no timestamp to re-stamp; devices::revoke has the same shape. No DELETE FROM api_keys or devices exists in crates/, so a false result means the id never existed rather than a key already gone, and the row-cleanup rule has nothing to act on."
+        },
+        {
+          "technique": "expiry-buffer-beyond-lease",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/projects.rs:177 One clock only: the expiry is a column in the issuer's own table, checked by the issuer at authentication. No remote credential exists to carry a backstop expiry."
+        },
+        {
+          "technique": "lease-vs-native-tracking",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/devices.rs:52 The relying party is the issuer: keys are looked up in this store and refused by the caller on each request. The technique's own exclusion for issuer-enforced tokens applies."
+        },
+        {
+          "technique": "ttl-ladder-derivation",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/projects.rs:174 The store persists an absolute instant it is handed and derives no lifetime; there is no renewal of a key. Any derivation is computed in the API layer, see notes for a silent clamp there."
+        },
+        {
+          "technique": "wal-per-external-side-effect",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/devices.rs:21 Credential writes are single statements on the issuer's own connection. A grep of the 12 context files for reqwest, http::, hyper, Command::new, TcpStream and tokio::net found nothing, so no remote mutation needs a witness."
+        }
+      ],
+      "registryProposal": "persist-before-provision's issuer-as-verifier section names carriers that fail after the insert (file, claim slot, cache) but not a compound operation where a later fallible step in the same request aborts before the response is built. Rotation (insert successor, then retire predecessor) is that case and deserves a named decision rule: make the steps one transaction, or revoke the inserted row on the later failure.",
+      "withdrawn": {
+        "worker": "7a3f2c4e-eb99-488c-81f3-a4874a8ae41a",
+        "state": "deviation",
+        "at": "2026-11-09T01:23:46.816286+00:00",
+        "reason": "reviewer (sonnet): The deviation anchors on rotate_key in crates/api/src/projects_keys.rs, which is not among this context's files (crates/store/src/sqlite/*). The missing transaction or compensating revoke is in the API handler's composition of two store calls. The store anchors (projects.rs:162, :177, devices.rs:52)"
+      }
     }
   }
 }
