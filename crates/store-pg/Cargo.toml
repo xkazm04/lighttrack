@@ -22,4 +22,4 @@ chrono.workspace = true
 # `tls-rustls-ring-native-roots` would keep OS roots, at the cost of a second crypto provider
 # (ring alongside aws-lc-rs) in the same binary.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres"] }
